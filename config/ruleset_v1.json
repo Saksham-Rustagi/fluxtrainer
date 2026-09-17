@@ -48,6 +48,7 @@
     "marginPerMille": 2500
   },
 
+
   "_grids": "Spec 2.3. Grid split 60/40, tiers Spam 20 / Good Casual 50 / Casual 30, candidate counts as published. Where min != max, N is drawn uniformly per board. Seed lengths are 8-11 on 4x4 and 9-13 on 5x5, with the longest (11 and 13) restricted to Spam; the spec gives no distribution over the remaining lengths, so uniform weights are provisional.",
   "grids": [
     {

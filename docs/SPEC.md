@@ -167,7 +167,9 @@ Vocabulary is not one thing, and lumping it together is what makes people rank i
 
 It is conditional on **reachability**: the extra cell has to be adjacent to the right end of the stem path and not already consumed by it. How often that holds is unknown and is the single most important unverified number in this spec. It is computable from the simulator (5.3) and has to be computed before the curriculum is built, because if the answer is 2 extra words a game rather than 12, the batch system is the wrong product.
 
-**Cheap vocabulary: mutating affixes.** PRATE + ING is PRATING, not PRATEING. The E is consumed, so PRATING does not run along PRATE's path and you have to find it as a separate word. Same for consonant doubling and Y → I changes. These are **not** free points, and the earlier draft of this spec was wrong to lump them in.
+**Cheap vocabulary: mutating affixes.** PRATE + ING is PRATING, not PRATEING. The E is consumed, so PRATING does not run along PRATE's path and you have to find it as a separate word. Y → I changes behave the same way: SANTY's Y is gone in SANTIER. These are **not** free points, and an earlier draft of this spec was wrong to lump them in.
+
+Consonant doubling is the exception and does **not** belong in this bucket: BAT → BATTING keeps B-A-T contiguous and intact, so the stem's path survives and the extra T-I-N-G are added cells. It is additive, and an earlier draft of this section wrongly listed it here. The test is containment, not morphology (§7.3).
 
 Their value is entirely negative knowledge: knowing that PRATING is valid and PRATIER is not stops you spending swipes on nothing. So mutating affixes are trained, but they belong to the misswipe track (3.6), not the free-points track, and they are worth much less per item.
 
@@ -319,7 +321,7 @@ Two optimizations if it gets tight:
 | --- | --- |
 | `family_stats` | The primary output. Per stem × (grid, tier): P(stem path present), **E\[members findable \| present\]** (the enumerability test in 7.5), expected points, member count. For Spam, also split at the quartiles of realized N (see below) |
 | `word_stats` | Per word × (grid, tier): P(appears), E\[paths per board\] |
-| `reachability` | Per stem × affix: P(additive extension present and reachable \| stem path present). The number the free-vocabulary thesis rests on (3.5) |
+| `reachability` | Per stem × affix: P(additive extension present and reachable \| stem path present). The number the free-vocabulary thesis rests on (3.5). Affixes are the mined set from 7.3, never a hand-written list, so the measurement is not conditioned on a guess about which affixes matter |
 | `cellmate_stats` | Per pair × relation × length: P(cellmate has a valid path \| word has a valid path). Decides which pairs are worth teaching (7.6). Also reports the count of `drop-terminal` words implied by a typical board's found-set, which needs no probability estimate at all |
 | `board_norms` | Distribution of total points, word count, 5+ count per tier. Classifies tiers at runtime, sanity-checks Par. |
 
@@ -418,28 +420,37 @@ A family is only surfaced if all of these hold:
 
 For each stem, precompute which affixes produce valid CSW21 words and which do not. Both halves are stored: the valid half is points, the invalid half prevents misswipes.
 
-**Affix application is a string operation, not concatenation.** This has to be specified or the whole block is unimplementable. Generation rule, applied in order, with the result checked against the DAWG:
+**Affixes are derived, not enumerated.** There is no affix list anywhere in this spec or in the config. Three separate mechanisms do three separate jobs, and an earlier draft conflated all three into a single hand-typed list.
+
+**1. Live affixes — no list, ever.** Walk the DAWG to the stem's node. Its subtree enumerates every valid continuation of that stem, exactly and completely: that *is* the live suffix set, discovered rather than guessed. Front extensions come from the same walk over a reversed DAWG. A hand-written list can only be wrong in two directions at once — missing live affixes the dictionary has, and carrying ones it does not.
+
+**2. Classification — substring containment, not morphology.** A word W is `additive` with respect to stem S **iff S appears in W as a contiguous substring**. That is not an approximation of the path condition, it is exactly the path condition: S's cells are used, in order, untouched, and W's remaining letters are the added cells.
 
 ```
-stem ends in E,  affix starts with a vowel   → drop the E      PRATE + ING → PRATING
-stem ends in Y,  affix is ER/EST/ES/ED       → Y becomes I     SANTY  + ER  → SANTIER
-stem ends in CVC, affix starts with a vowel  → double the C     BAT    + ING → BATTING
-otherwise                                    → concatenate     PRATE  + R   → PRATER
+PRATERS contains PRATE          → additive
+PRATING does not contain PRATE  → not additive
+BATTING contains BAT            → additive (B-A-T intact, T-I-N-G appended)
 ```
 
-Each generated form is then classified by comparing its path requirements against the stem's path:
+The drop-E, Y→I and consonant-doubling rules an earlier draft used for classification are **deleted from the classification path**. They were an attempt to predict what containment answers exactly. Note that BATTING falls out as additive, which contradicts §3.5's claim that consonant doubling is never free — containment is right and §3.5's aside is wrong: BAT's three cells are intact and in order, so the path extends.
+
+**3. Dead affixes — mined, not typed.** This is the only place a candidate set is needed, because "not a word" is only interesting for strings a player would plausibly try. Build it from the dictionary: for every stem in the mined stem set, collect the continuations that make valid words, count each continuation across the whole dictionary, and keep the most productive ~30. That is the affix alphabet, discovered from CSW21. For a given stem, its dead affixes are the productive affixes that do **not** complete it. Personal misswipe history layers on top, per §7.3.1.
+
+**Mutation rules survive in exactly one narrow role:** generating candidate related-but-not-containing words (PRATING from PRATE) so they can be taught as misswipe-prevention items. They no longer decide validity — a DAWG lookup does — and they no longer decide class — containment does.
+
+Each form is then classified by comparing its path requirements against the stem's path:
 
 | Class | Condition | Value |
 | --- | --- | --- |
 | `drop-terminal` | a contiguous sub-path of the word's own path, trimmed from either end (see 7.6) | **Guaranteed** free points. Pathable by construction, P = 1.0. Ranks above everything below. |
-| `additive` | stem's cells all used, in order, plus new cells | Free points *if reachable*. Extends the path. |
+| `additive` | stem is a contiguous substring of the word | Free points *if reachable*. Extends the path. |
 | `cellmate` | same cells, different path (see 7.6) | Free points *if pathable*. Reuses the path. |
-| `mutating` | stem's cells not preserved (letter dropped or changed) | Misswipe prevention only |
+| `mutating` | valid word, stem not contained (letter dropped or changed) | Misswipe prevention only |
 | `dead` | not a valid word | Misswipe prevention only |
 
 `drop-terminal` is the only class whose value is unconditional. `additive` and `cellmate` are both contingent on a probability that has to be measured, and everything below them is worth nothing in points.
 
-**Affix set:** -S, -ES, -ED, -ER, -ERS, -EST, -ING, -IER, -IEST, -IERS, -Y, -AL, -IC, -OUS, plus single-letter and common multi-letter front extensions (A-, BE-, DE-, EN-, OUT-, OVER-, RE-, UN-). The set is config, not code, and should be revised once real data shows which affixes actually generate misswipes for you.
+Note that `cellmate` is unreachable from affix generation, since appending or prepending letters never permutes the stem's own letters. Cellmates are found through the anagram index (§7.6), not through this path.
 
 Display leads with the shared part, since the pattern is the thing being learned. Additive forms are shown in the points colour, mutating and dead forms in the warning colour, because they are different skills:
 

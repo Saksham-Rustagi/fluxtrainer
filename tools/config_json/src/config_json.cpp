@@ -459,6 +459,7 @@ void parseTop(const JsonValue& root, const std::string& origin, LoadResult* out)
         requireUInt(requireMember(cheap, "marginPerMille", origin + ".cheapScoring"),
                     origin + ".cheapScoring.marginPerMille", 1000, 1000000));
 
+
     const JsonValue& grids = requireArray(requireMember(root, "grids", origin), origin + ".grids");
     if (grids.items.empty()) fail(origin + ".grids", "must list at least one grid");
     if (grids.items.size() > kMaxGrids) {

@@ -21,6 +21,7 @@ namespace config {
 struct LoadResult {
     RulesetConfig config;
 
+
     // The `provisional` list from the file (spec 2.4). Carried as text for
     // the loading tool to print; core does not see it.
     std::vector<std::string> provisional;
