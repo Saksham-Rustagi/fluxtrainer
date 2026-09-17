@@ -79,7 +79,13 @@ The marginal jump flattens after 6. Going from 5 to 6 letters is worth 600 point
 | Good Casual | 50% | 10–20 | 10–20 |
 | Casual | 30% | 5 | 3 |
 
+**Where N is a range, it is drawn uniformly at random per board.** For 4x4 Spam that is a uniform draw over [144, 625]. Best-of-144 and best-of-625 produce measurably different boards, so the Spam tier is a spread rather than a point, and the simulator records the realized N on every Spam board (5.3).
+
 **Candidates in the best-of-N are ranked by total available points on the board.** Confirmed, not assumed. This is the single most consequential generation parameter, because it determines what a Spam board looks like: selecting on point mass favours boards with dense long-word clusters and heavy stem reuse, rather than boards with many distinct short words. The simulator ranks candidates the same way, and `board_norms` is built from that ranking.
+
+**A word contributes to total available points exactly once, however many distinct paths spell it.** Duplicate words do not score twice in play, so per-path counting would rank boards by points no player can capture, and best-of-N would select for dense repeated-letter boards on the strength of value that does not exist. This is settled and hardcoded in the potential metric, not a configurable option. It constrains the scoring metric only: the solver still enumerates and stores every distinct path per word, because reachability, cellmate and enumerability analysis all depend on paths.
+
+**Seeding happens before tier selection.** A candidate is seeded first, then the tier's best-of-N runs over seeded candidates. Each of the N candidates draws its own seed word and placement independently, rather than all N sharing one seed word with different fills — candidates are independent everywhere else and this keeps them so. A consequence worth remembering when reading simulation output: because selection happens after seeding, a selected board's potential comes partly from its seed, so seeded boards are overrepresented at the top of every best-of-N.
 
 ### 2.4 Parameters that are assumptions
 
@@ -87,7 +93,7 @@ These are flagged in the config as `provisional` and are the first thing to conf
 
 1. **Letter distribution.** Placeholder is English letter frequency weighted by frequency in words (not in running text), which is the sane default. Flux may use Boggle-style dice, which produce a meaningfully different distribution because dice guarantee vowel spread. If it turns out to be dice, the simulation output changes a lot and has to be rerun.
 2. **Letter variety adjustment.** The note that variety is "probably increased in casual/good casual" is modeled as a tunable bias toward distinct letters, off by default until confirmed.
-3. **Seed placement.** Assumed to be: pick a word of the target length, lay its path on the grid as a self-avoiding walk, fill the remaining cells from the letter distribution, then run the tier's best-of-N on top. Whether seeding happens before or after tier selection changes the seed's visibility.
+3. **Seed placement mechanism.** Assumed to be: pick a word of the target length, lay its path on the grid as a self-avoiding walk, then fill the remaining cells from the letter distribution. Whether Flux lays seeds this way is unconfirmed. The *ordering* around tier selection is not an assumption — seeding happens first, per 2.3.
 
 Until these are confirmed, every number the app derives from simulation carries a `ruleset_version` and the UI shows a quiet "stats v3" marker, so you never get confused about why a word's seen percentage moved.
 
@@ -167,7 +173,7 @@ Their value is entirely negative knowledge: knowing that PRATING is valid and PR
 
 **Expensive vocabulary** is an isolated word needing its own search. Here the earlier argument holds: it only pays on sparse boards where you had spare capacity, and on dense boards it is nearly worthless because you had 800 other words and no time.
 
-Every family member is tagged `additive`, `mutating`, or `independent` at extraction time, and the three are valued, scheduled, and displayed differently.
+Every family member is tagged `drop-terminal`, `additive`, `cellmate`, `mutating`, or `independent` at extraction time, and each is valued, scheduled, and displayed differently. `drop-terminal` (7.6) leads the ordering because it is the one class whose points are guaranteed rather than probable.
 
 So the study list has to separate these explicitly. They are not ranked on the same scale, and Section 6 gives them different value formulas.
 
@@ -262,10 +268,16 @@ CSW21 is about 280,000 words. Only words of length 3 to 16 (4x4) or 3 to 25 (5x5
 
 Encode as a **DAWG** (minimal deterministic acyclic word graph) built offline:
 
-- Node = 32-bit packed record: child index, letter (5 bits), end-of-word flag, end-of-list flag.
-- Expect roughly 100k to 150k nodes after minimization, so under 1 MB. Trivially fits in the app bundle and stays memory-resident.
-- Ship as a flat binary loaded with `mmap`, no parse step, instant cold start.
-- Store a parallel word-index array so a DAWG terminal maps to a stable integer word ID used everywhere else (stats tables, family tables, player model).
+- Edge = 32-bit packed record: child index (25 bits), letter (5 bits), end-of-word flag, end-of-list flag.
+- Built by incremental minimization (Daciuk-style) from a sorted word list. Measured on CSW21: 79,807 states, 191,740 edges, 1.34 MB. Trivially fits in the app bundle and stays memory-resident.
+- Ship as a flat little-endian binary loaded with `mmap`, no parse step, instant cold start.
+- **Numbered (perfect-hash) DAWG:** each state stores the count of words reachable through it, so any terminal maps to a dense integer word ID computed during the walk itself. There is no parallel word-index array and no side table; the ID falls out of the traversal that was happening anyway.
+
+Every downstream artifact — stats tables, family tables, player model — keys on that ID, so three invariants are load-bearing:
+
+- **IDs are dense and contiguous**, covering exactly `[0, word_count)`.
+- **IDs are stable across rebuilds** from the same sorted input. The builder is deterministic and produces byte-identical output.
+- **IDs change when the dictionary changes.** Every derived artifact therefore records the hash of the dictionary it was built against. Reading a stats table whose dictionary hash does not match the loaded DAWG is a **hard error, not a warning** — the IDs silently mean different words, which would corrupt every number in the app without any visible symptom.
 
 ### 5.2 Solver
 
@@ -305,11 +317,16 @@ Two optimizations if it gets tight:
 
 | Artifact | Contents |
 | --- | --- |
-| `family_stats` | The primary output. Per stem × (grid, tier): P(stem path present), **E\[members findable \| present\]** (the enumerability test in 7.5), expected points, member count |
+| `family_stats` | The primary output. Per stem × (grid, tier): P(stem path present), **E\[members findable \| present\]** (the enumerability test in 7.5), expected points, member count. For Spam, also split at the quartiles of realized N (see below) |
 | `word_stats` | Per word × (grid, tier): P(appears), E\[paths per board\] |
 | `reachability` | Per stem × affix: P(additive extension present and reachable \| stem path present). The number the free-vocabulary thesis rests on (3.5) |
-| `cellmate_stats` | Per pair × relation × length: P(cellmate has a valid path \| word has a valid path). Decides which pairs are worth teaching (7.6) |
+| `cellmate_stats` | Per pair × relation × length: P(cellmate has a valid path \| word has a valid path). Decides which pairs are worth teaching (7.6). Also reports the count of `drop-terminal` words implied by a typical board's found-set, which needs no probability estimate at all |
 | `board_norms` | Distribution of total points, word count, 5+ count per tier. Classifies tiers at runtime, sanity-checks Par. |
+
+**Per-board fields recorded during simulation**, because two generation parameters are spreads rather than points and averaging over them destroys information the curriculum needs:
+
+- **Realized N.** 4x4 Spam draws N uniformly from [144, 625] (2.3), so `board_norms` for Spam aggregates over that draw exactly as ranked does. But every per-tier statistic that feeds the curriculum — enumerability above all — is **also reported split at the quartiles of N**. If a stem's enumerability sits in the usable 2-to-6 band at N=144 and blows past it at N=625, that stem is a hunting cue on only half of Spam boards, and the curriculum has to know that rather than average it away.
+- **Seed presence and identity.** Whether the board carried a seed and which word it was. Because selection happens after seeding (2.3), seeded boards are expected to be overrepresented at the top of every best-of-N. If they dominate the Spam tier far beyond the 50% base rate, that is a real finding about what Spam boards *are*, not a generator bug.
 
 Only words with P(appear) above about 1e-5 in any cell are retained. Expect 60k to 120k surviving words, which is the set actually worth showing a human.
 
@@ -414,10 +431,13 @@ Each generated form is then classified by comparing its path requirements agains
 
 | Class | Condition | Value |
 | --- | --- | --- |
-| `additive` | stem's cells all used, in order, plus new cells | Free points. Extends the path. |
-| `cellmate` | same cells, different path (see 7.6) | Free points. Reuses the path. |
+| `drop-terminal` | a contiguous sub-path of the word's own path, trimmed from either end (see 7.6) | **Guaranteed** free points. Pathable by construction, P = 1.0. Ranks above everything below. |
+| `additive` | stem's cells all used, in order, plus new cells | Free points *if reachable*. Extends the path. |
+| `cellmate` | same cells, different path (see 7.6) | Free points *if pathable*. Reuses the path. |
 | `mutating` | stem's cells not preserved (letter dropped or changed) | Misswipe prevention only |
 | `dead` | not a valid word | Misswipe prevention only |
+
+`drop-terminal` is the only class whose value is unconditional. `additive` and `cellmate` are both contingent on a probability that has to be measured, and everything below them is worth nothing in points.
 
 **Affix set:** -S, -ES, -ED, -ER, -ERS, -EST, -ING, -IER, -IEST, -IERS, -Y, -AL, -IC, -OUS, plus single-letter and common multi-letter front extensions (A-, BE-, DE-, EN-, OUT-, OVER-, RE-, UN-). The set is config, not code, and should be revised once real data shows which affixes actually generate misswipes for you.
 
@@ -479,15 +499,20 @@ What survives is roughly the 4-to-6-letter band: -LLERS, -NTERS, -EATER, -ANTED.
 
 SEATERS and SAETERS sit on the same seven cells. Once you have found one, the cells are already located and the only open question is whether a second path through them exists. That is nearly free, and it is free on a **different axis** from additive affixes: additives extend the path, cellmates reuse it.
 
-Three relations, all precomputed over the dictionary:
+Four relations, all precomputed over the dictionary:
 
 | Relation | Example | Notes |
 | --- | --- | --- |
-| **Anagram** | SEATERS / SAETERS / TEASERS / EASTERS | Identical letter multiset. The strongest case. |
-| **Drop-one** | CANTERED → CANTRED | Same cells minus one. Always available if the longer word is. |
+| **Anagram** | SEATERS / SAETERS / TEASERS / EASTERS | Identical letter multiset. The strongest measured case. |
+| **Drop-terminal** | CANTERED → CANTER | Letters removed from either end. The result is a contiguous sub-path of the original path, so it is **always pathable**, P = 1.0 by construction. No measurement needed. |
+| **Drop-interior** | CANTERED → CANTRED | A letter removed from the middle. Requires adjacency the original path never needed — CANTRED needs T adjacent to R, which CANTERED's own path (T→E→R) does not provide. Not guaranteed; measured. |
 | **Add-one** | CANTER → CANTRED | Needs one adjacent free cell, same condition as an additive affix. |
 
-**The value condition is not automatic.** An anagram's letters are present, but adjacency constrains order, so a valid path may not exist. `P(cellmate has a valid path | word has a valid path)` has to be measured in simulation, per relation and per length. Expect it to be high for 5s and to fall off for 7+, where path constraints bite. Only pairs above about 0.5 are worth teaching.
+An earlier draft of this table had a single "drop-one" relation claiming it was always available if the longer word was. That is true only for the terminal case, and the example given was the interior one. The split above is the fix, and it matters for more than correctness.
+
+**Drop-terminal is the only guaranteed-free relation in the whole spec.** If you have the long word, the short one is already on the board, with no probability attached and no risk. It is therefore its own study class (7.3), ranked above both `additive` and `cellmate`, and `cellmate_stats` reports how many drop-terminal words a typical board's found-set implies — a count, not an estimate.
+
+**For every other relation the value condition is not automatic.** An anagram's letters are present, but adjacency constrains order, so a valid path may not exist. `P(cellmate has a valid path | word has a valid path)` has to be measured in simulation, per relation and per length. Expect it to be high for 5s and to fall off for 7+, where path constraints bite. Only pairs above about 0.5 are worth teaching.
 
 **They are stored and taught as directed trigger pairs**, because that is how they are used in play: the common word is the trigger, the rarer one is the response. SEATERS → check SAETERS, not an undirected set. Direction is assigned by seen percentage.
 
@@ -800,7 +825,7 @@ Entry points into it:
 - **Common families I'm missing.** Ranked by `StudyValue`, the default landing view.
 - **Families I've leaked.** Families where I missed a member in a real game in the last 30 days.
 - **High-ambiguity stems.** Where the dead affixes are surprising. The misswipe prevention list.
-- **Cellmate pairs.** Anagram and drop-one pairs above the path-probability threshold, shown as trigger → response.
+- **Cellmate pairs.** Anagram and drop-interior pairs above the path-probability threshold, shown as trigger → response. Drop-terminal pairs are listed unconditionally, since they carry no threshold to clear.
 - **Adjacent to what I know.** Families sharing a stem shape with families already graduated, the cheapest possible expansion.
 
 Within a family, the breadcrumb shows where the stem sits in the containment chain (-LLERS under -ERS under -RS), so you can widen the view when exploring. The enumerable level is what the app tells you to hunt for; drills target your residual in the family, whatever its size (7.5.1).
@@ -926,7 +951,7 @@ Boards are stored as their letter string plus the generator seed, not as solved 
 
 | Item | Estimate |
 | --- | --- |
-| `dawg.bin` | under 1 MB |
+| `dawg.bin` | 1.34 MB (measured, CSW21: 79,807 states / 191,740 edges) |
 | `stats.sqlite` | 30–60 MB, dominated by `word_stat` |
 | App bundle | under 100 MB |
 | Board generation, Spam tier | under 1 second, off main thread |
@@ -1021,12 +1046,12 @@ Mitigations: keep `ruleset_version` on every derived number, make the pipeline a
 ### 16.3 Questions for the Flux developer
 
 1. Exact letter distribution or dice configuration.
-2. When total points are summed for board potential, does a word that can be spelled along several distinct paths count once or once per path?
-3. Whether the letter-variety adjustment on Casual and Good Casual is real.
-4. Whether seeding happens before or after tier selection.
-5. Exact Collins 21 edition and any house additions or removals.
-6. **Does re-swiping an already-found word cost time?** Not captured anywhere in this spec, and in fast play it is a real source of waste.
-7. Whether an end-of-game export of board plus found words could ever exist. Even a copyable text blob would let the trainer ingest real ranked games.
+2. Whether the letter-variety adjustment on Casual and Good Casual is real.
+3. Exact Collins 21 edition and any house additions or removals.
+4. **Does re-swiping an already-found word cost time?** Not captured anywhere in this spec, and in fast play it is a real source of waste.
+5. Whether an end-of-game export of board plus found words could ever exist. Even a copyable text blob would let the trainer ingest real ranked games.
+
+Two questions previously on this list have been settled and removed: multi-path words count once toward board potential, and seeding happens before tier selection. Both are specified in 2.3 and neither is configurable.
 
 ### 16.4 Product risks
 
