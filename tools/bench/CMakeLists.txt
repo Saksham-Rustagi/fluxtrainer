@@ -1,2 +1,2 @@
 add_executable(bench main.cpp)
-target_link_libraries(bench PRIVATE fluxcore)
+target_link_libraries(bench PRIVATE config_json)

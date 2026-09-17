@@ -1,3 +1,5 @@
+#include "config_json.h"
+#include "generator.h"
 #include "solver.h"
 
 #include <algorithm>
@@ -127,15 +129,67 @@ void printRow(const char* label, const Outcome& outcome) {
                 outcome.meanPoints);
 }
 
+// Solve cost on boards the generator actually produces, per (grid, tier).
+// The random boards above bracket the cost; these are the real distribution,
+// and they are what the 300 us / 3 ms targets should be judged against.
+void benchByTier(const Dawg& dawg, const std::string& configPath, size_t perCell) {
+    fluxcore::config::LoadResult loaded;
+    std::string error;
+    if (!fluxcore::config::loadRulesetConfig(configPath, &loaded, &error)) {
+        std::cerr << "error: " << error << "\n";
+        return;
+    }
+
+    fluxcore::SeedPool seeds;
+    seeds.buildForRuleset(dawg, loaded.config);
+    fluxcore::Generator generator(dawg, loaded.config, seeds);
+    Solver solver(dawg, loaded.config.scores, loaded.config.solver);
+
+    std::printf("\nsolve time on generated boards, by tier (microseconds)\n");
+    std::printf("  %-28s %8s %8s %8s   %7s %8s %9s\n", "case", "p50", "p95", "max", "words",
+                "paths", "points");
+
+    for (const uint8_t side : {4, 5}) {
+        for (const fluxcore::Tier tier :
+             {fluxcore::Tier::Casual, fluxcore::Tier::GoodCasual, fluxcore::Tier::Spam}) {
+            std::vector<Board> boards;
+            boards.reserve(perCell);
+            fluxcore::GenerationRecord record;
+            for (size_t i = 0; i < perCell; ++i) {
+                Board board;
+                if (generator.generate(side, tier, static_cast<uint32_t>(i), 99, &board, &record)) {
+                    boards.push_back(board);
+                }
+            }
+            if (boards.empty()) continue;
+            const char* name = tier == fluxcore::Tier::Casual        ? "casual"
+                               : tier == fluxcore::Tier::GoodCasual ? "goodCasual"
+                                                                    : "spam";
+            for (const SolveMode mode : {SolveMode::Count, SolveMode::Full}) {
+                char label[64];
+                std::snprintf(label, sizeof(label), "%dx%d %-11s %s", side, side, name,
+                              mode == SolveMode::Count ? "count" : "full ");
+                printRow(label, benchBoards(solver, boards, mode));
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "usage: bench <dawg-path> [boards-per-case]\n";
+        std::cerr << "usage: bench <dawg-path> [boards-per-case] [--config <ruleset.json>]\n";
         return 1;
     }
+    std::string configPath;
+    size_t perCase = 2000;
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--config" && i + 1 < argc) configPath = argv[++i];
+        else perCase = static_cast<size_t>(std::stoul(arg));
+    }
     const std::vector<uint8_t> bytes = readFile(argv[1]);
-    const size_t perCase = (argc > 2) ? static_cast<size_t>(std::stoul(argv[2])) : 2000;
 
     Dawg dawg;
     if (!dawg.loadFromMemory(bytes.data(), bytes.size())) {
@@ -163,6 +217,8 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    if (!configPath.empty()) benchByTier(dawg, configPath, perCase / 4 + 1);
 
     // A dense real board: LetterCounter's best 4x4 from a 35M-board search.
     // Worst-case stress rather than a typical board.
