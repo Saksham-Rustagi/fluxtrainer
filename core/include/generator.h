@@ -184,6 +184,29 @@ public:
     bool generate(uint8_t side, Tier tier, uint32_t boardIndex, uint64_t rootSeed, Board* outBoard,
                   GenerationRecord* outRecord);
 
+    // What a constrained generation actually cost. Spec 11.1 warns that up to
+    // 625 candidates each passing a 60-90% rejection filter is potentially
+    // thousands of generate-solve cycles, and that the "under 1 second" in
+    // 14.4 is the unconstrained number. These are the fields that answer it.
+    struct ConstrainedStats {
+        uint32_t candidatesBuilt = 0;
+        uint32_t candidatesAccepted = 0;
+        uint32_t solves = 0;
+        uint32_t placementFailures = 0;
+        uint32_t normRejects = 0;
+        bool exhausted = false;
+    };
+
+    // Spec 11.1: lay `target` on the grid first, then run the tier's best-of-N
+    // over candidates that all carry it and all land inside the tier's norm
+    // band [normLow, normHigh]. Returns false if `attemptBudget` ran out
+    // before N candidates were accepted, which is the infeasibility case the
+    // fallback ladder in 11.1 exists for.
+    bool generateConstrained(uint8_t side, Tier tier, const char* target, uint8_t targetLen,
+                             uint32_t boardIndex, uint64_t rootSeed, uint64_t normLow,
+                             uint64_t normHigh, uint32_t attemptBudget, Board* outBoard,
+                             GenerationRecord* outRecord, ConstrainedStats* outStats);
+
     // The 60/40 grid split and the tier shares, for callers that want the
     // ranked mix rather than a stratified cell.
     uint8_t drawSide(Rng& rng) const;

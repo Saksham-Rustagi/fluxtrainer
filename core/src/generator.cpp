@@ -474,4 +474,99 @@ uint64_t canonicalBoardHash(const Board& board) {
     return h;
 }
 
+// Spec 11.1. Differs from generate() in two ways: every candidate has the
+// target laid down before the fill, and a candidate only counts toward N if
+// its potential lands inside the tier's norm band. Step 5 of 11.1 is what
+// keeps these boards honest -- embedding a family raises density, so without
+// the band check every training board drifts toward Spam.
+bool Generator::generateConstrained(uint8_t side, Tier tier, const char* target, uint8_t targetLen,
+                                    uint32_t boardIndex, uint64_t rootSeed, uint64_t normLow,
+                                    uint64_t normHigh, uint32_t attemptBudget, Board* outBoard,
+                                    GenerationRecord* outRecord, ConstrainedStats* outStats) {
+    ConstrainedStats stats;
+    const GridConfig* grid = config_.grid(side);
+    if (grid == nullptr || side == 0 || side > kMaxSide || targetLen == 0) {
+        if (outStats) *outStats = stats;
+        return false;
+    }
+
+    const uint64_t boardSeed = deriveBoardSeed(rootSeed, simulationCellId(side, tier), boardIndex);
+    Rng boardRng(boardSeed);
+
+    const CandidateRange& range = grid->candidates[static_cast<uint8_t>(tier)];
+    const uint32_t span = range.maxN >= range.minN ? range.maxN - range.minN + 1 : 1;
+    uint32_t realizedN = range.minN + boardRng.below(span);
+    if (realizedN == 0) realizedN = 1;
+
+    const BoardGeometry& geom = solver_.geometry(side);
+
+    Candidate best;
+    uint64_t bestPoints = 0;
+    bool haveBest = false;
+
+    for (uint32_t attempt = 0; attempt < attemptBudget && stats.candidatesAccepted < realizedN;
+         ++attempt) {
+        Rng rng(splitmix64(boardSeed ^ (0x632BE59BD9B4E019ull * (attempt + 1))));
+
+        Candidate candidate;
+        candidate.board = Board{};
+        candidate.board.side = side;
+        uint32_t filled = 0;
+        ++stats.candidatesBuilt;
+
+        if (!embedWord(target, targetLen, geom, rng, false, &candidate.board, &filled)) {
+            ++stats.placementFailures;
+            continue;
+        }
+        // The target is laid first, but the board is otherwise generated
+        // normally -- 11.1 step 6 runs the tier's ordinary best-of-N on top,
+        // and a Spam board that dropped its seed would fall out of the tier's
+        // own norm band by construction rather than by chance.
+        if (rng.chance(config_.seedProbabilityPerMille, 1000)) {
+            placeSeed(side, tier, *grid, rng, &candidate.board, &filled, &candidate);
+        }
+        for (uint8_t c = 0; c < geom.cellCount(); ++c) {
+            if (filled & (1u << c)) continue;
+            candidate.board.letters[c] =
+                static_cast<uint8_t>(rng.pickWeighted(config_.letterWeights, 26, letterWeightTotal_));
+        }
+
+        solver_.solve(candidate.board, SolveMode::Count, &scratch_);
+        ++stats.solves;
+        const uint64_t points = scratch_.totalPoints;
+        if (points < normLow || points > normHigh) {
+            ++stats.normRejects;
+            continue;
+        }
+
+        ++stats.candidatesAccepted;
+        if (!haveBest || points > bestPoints) {
+            best = candidate;
+            bestPoints = points;
+            haveBest = true;
+        }
+    }
+
+    stats.exhausted = stats.candidatesAccepted < realizedN;
+    if (outStats) *outStats = stats;
+    if (!haveBest) return false;
+
+    *outBoard = best.board;
+    if (outRecord) {
+        GenerationRecord& record = *outRecord;
+        record = GenerationRecord{};
+        record.side = side;
+        record.tier = tier;
+        record.boardIndex = boardIndex;
+        record.rootSeed = rootSeed;
+        record.boardSeed = boardSeed;
+        record.realizedN = realizedN;
+        record.winningPoints = bestPoints;
+        record.seedPlacementFailures = stats.placementFailures;
+        record.rulesetVersion = config_.version;
+        record.configHash = config_.configHash;
+    }
+    return !stats.exhausted;
+}
+
 }  // namespace fluxcore
