@@ -9,6 +9,8 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+enable_testing()
+
 add_subdirectory(core)
 add_subdirectory(tools)
 add_subdirectory(tests)

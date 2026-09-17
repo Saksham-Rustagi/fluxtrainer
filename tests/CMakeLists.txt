@@ -14,7 +14,6 @@ target_link_libraries(test_generator PRIVATE fluxcore dawg_builder Threads::Thre
 add_executable(test_affix test_affix.cpp)
 target_link_libraries(test_affix PRIVATE fluxcore dawg_builder lexicon)
 
-enable_testing()
 add_test(NAME test_dawg COMMAND test_dawg)
 add_test(NAME test_solver COMMAND test_solver)
 add_test(NAME test_oracle COMMAND test_oracle)
