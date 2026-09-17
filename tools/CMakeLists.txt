@@ -1,3 +1,5 @@
 add_subdirectory(dawg_builder)
 add_subdirectory(build_dawg)
 add_subdirectory(bench)
+add_subdirectory(config_json)
+add_subdirectory(genbench)

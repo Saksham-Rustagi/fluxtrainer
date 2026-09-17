@@ -4,6 +4,7 @@ add_library(fluxcore STATIC
     src/dawg.cpp
     src/board.cpp
     src/solver.cpp
+    src/generator.cpp
     src/fluxcore_shim.cpp
 )
 target_include_directories(fluxcore PUBLIC include)

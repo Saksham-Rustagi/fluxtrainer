@@ -1,0 +1,85 @@
+{
+  "_about": "FluxCore ruleset v1. Every generation parameter lives here; no generation constant appears in a .cpp file. Derived artifacts record the FNV-1a hash of this file's raw bytes, so any edit -- including whitespace -- invalidates them on purpose. Keys beginning with '_' are comments and are ignored by the loader.",
+  "version": 1,
+
+  "provisional": [
+    "letterWeights",
+    "seedLengths.weight",
+    "seeding.probabilityPerMille",
+    "seeding.allowSeedOverlap",
+    "seeding.extraSeedCount"
+  ],
+
+  "_letterWeights": "Spec 2.4 item 1, PROVISIONAL. English letter frequency weighted by frequency in words, not in running text: occurrences per 100,000 letters across the 279,496-word CSW21 list (bogwords.txt), rounded to sum to exactly 100,000. This is the 'sane default' the spec names, not a model of Flux. Flux may use Boggle-style dice, which guarantee vowel spread and would produce a materially different distribution; if so every simulated number has to be recomputed. Deliberately NOT LetterCounter's compute_letter_weights, which adds a vowel bonus and an ERSTAIN bonus to make good boards and would bias every statistic.",
+  "letterWeights": {
+    "A": 7731, "B": 1859, "C": 4009, "D": 3355, "E": 11280, "F": 1192,
+    "G": 2802, "H": 2500, "I": 9034, "J": 167,  "K": 938,  "L": 5230,
+    "M": 2896, "N": 6692, "O": 6630, "P": 3001, "Q": 169,  "R": 6983,
+    "S": 9628, "T": 6523, "U": 3309, "V": 920,  "W": 769,  "X": 284,
+    "Y": 1616, "Z": 483
+  },
+
+  "_scoreTable": "Spec 2.2, confirmed. 3/4/5/6 are given; n >= 7 is 1400 + 400(n-6), written out to length 25 because a 5x5 board can in principle hold a 25-letter path.",
+  "scoreTable": {
+    "3": 100, "4": 400, "5": 800, "6": 1400, "7": 1800, "8": 2200, "9": 2600,
+    "10": 3000, "11": 3400, "12": 3800, "13": 4200, "14": 4600, "15": 5000,
+    "16": 5400, "17": 5800, "18": 6200, "19": 6600, "20": 7000, "21": 7400,
+    "22": 7800, "23": 8200, "24": 8600, "25": 9000
+  },
+
+  "solver": {
+    "maxPathsPerWord": 64,
+    "minWordLen": 3
+  },
+
+  "_seeding": "Spec 2.3: 50% of boards carry a seed, drawn and placed independently per candidate. extraSeedCount/allowSeedOverlap are the LetterCounter overlap mode, which produces denser clusters than the spec's single-seed description; off by default because the spec describes one seed, and turning them on changes the board distribution.",
+  "seeding": {
+    "probabilityPerMille": 500,
+    "extraSeedCount": 0,
+    "allowSeedOverlap": false,
+    "pathAttempts": 8,
+    "placementAttempts": 64
+  },
+
+  "_cheapScoring": "Truncated candidate scoring with an early exit (spec 5.3). Disabled by default: it is only safe to turn on where the measured winner-agreement rate against full solving is high enough that it cannot move the board distribution. marginPerMille is how far under the leader a candidate's projected total must fall before it is dropped; larger is more conservative. These values were measured with tools/genbench over 5,220 boards: 99.90% winner agreement at 1.48x. minStartCells 4 buys 1.94x but drops agreement to 97.97%, which is not safe.",
+  "cheapScoring": {
+    "enabled": false,
+    "minStartCells": 8,
+    "marginPerMille": 2500
+  },
+
+  "_grids": "Spec 2.3. Grid split 60/40, tiers Spam 20 / Good Casual 50 / Casual 30, candidate counts as published. Where min != max, N is drawn uniformly per board. Seed lengths are 8-11 on 4x4 and 9-13 on 5x5, with the longest (11 and 13) restricted to Spam; the spec gives no distribution over the remaining lengths, so uniform weights are provisional.",
+  "grids": [
+    {
+      "side": 4,
+      "share": 60,
+      "tiers": {
+        "spam":       { "share": 20, "minCandidates": 144, "maxCandidates": 625 },
+        "goodCasual": { "share": 50, "minCandidates": 10,  "maxCandidates": 20 },
+        "casual":     { "share": 30, "minCandidates": 5,   "maxCandidates": 5 }
+      },
+      "seedLengths": [
+        { "length": 8,  "weight": 1, "spamOnly": false },
+        { "length": 9,  "weight": 1, "spamOnly": false },
+        { "length": 10, "weight": 1, "spamOnly": false },
+        { "length": 11, "weight": 1, "spamOnly": true }
+      ]
+    },
+    {
+      "side": 5,
+      "share": 40,
+      "tiers": {
+        "spam":       { "share": 20, "minCandidates": 81, "maxCandidates": 81 },
+        "goodCasual": { "share": 50, "minCandidates": 10, "maxCandidates": 20 },
+        "casual":     { "share": 30, "minCandidates": 3,  "maxCandidates": 3 }
+      },
+      "seedLengths": [
+        { "length": 9,  "weight": 1, "spamOnly": false },
+        { "length": 10, "weight": 1, "spamOnly": false },
+        { "length": 11, "weight": 1, "spamOnly": false },
+        { "length": 12, "weight": 1, "spamOnly": false },
+        { "length": 13, "weight": 1, "spamOnly": true }
+      ]
+    }
+  ]
+}
