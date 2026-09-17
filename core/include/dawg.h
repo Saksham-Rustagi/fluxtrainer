@@ -67,6 +67,12 @@ public:
     const DawgState& state(uint32_t stateIndex) const { return states_[stateIndex]; }
     const DawgEdge& edge(uint32_t edgeIndex) const { return edges_[edgeIndex]; }
 
+    // A state's wordCount is 0 exactly when it has no outgoing edges, which
+    // is also the only case where its edgeStart does not point at a real,
+    // end-of-list-terminated edge run. Anything walking the graph must check
+    // this before scanning a state's edges.
+    bool hasEdges(uint32_t stateIndex) const { return states_[stateIndex].wordCount != 0; }
+
     // Looks up `word` (uppercase A-Z, `len` bytes, need not be
     // NUL-terminated). Returns true and writes the dense word ID to
     // `outId` if `word` is in the dictionary.

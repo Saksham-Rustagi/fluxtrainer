@@ -48,10 +48,7 @@ bool Dawg::findWordId(const char* word, size_t len, uint32_t* outId) const {
     uint32_t id = 0;
 
     for (size_t i = 0; i < len; ++i) {
-        // A state's wordCount is 0 exactly when it has zero outgoing edges
-        // (a dead end / leaf), which is the only case where its edgeStart
-        // does not point to a real, end-of-list-terminated edge run.
-        if (states_[state].wordCount == 0) return false;
+        if (!hasEdges(state)) return false;  // dead end, nothing can continue
 
         char c = word[i];
         if (c < 'A' || c > 'Z') return false;

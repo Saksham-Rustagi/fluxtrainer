@@ -1,2 +1,4 @@
 build/
 *.dawg
+.claude/settings.local.json
+runs/
