@@ -7,8 +7,14 @@ If Flux turns out to use Boggle-style dice, the distribution changes materially 
 has to be recomputed. Every artifact records its config hash (`22448ec0ab243759`) and dictionary hash
 so a stale number is detectable rather than silently wrong.
 
-Dictionary: CSW21, 279,496 words, recovered from the LetterCounter repo. Measurement run:
-5,000 boards per cell × 6 cells, 3,000 M1 stems, 3,000 family stems, 18s on 14 threads.
+Dictionary: CSW21, 279,496 words, recovered from the LetterCounter repo. Three runs back these
+numbers, each with its own manifest:
+
+| run | what | size |
+| --- | --- | --- |
+| `runs/m-full` | M1 / M2 / M3, broad stem sample | 5,000 boards per cell × 6 cells, 18s |
+| `runs/m3-curated` | M3 remeasured under curation (§4.1) | 30,000 boards per cell × 6 cells, 710s |
+| `runs/full` | the full simulation — `word_stats`, `board_norms` (§5) | 5.2M boards, 1,859s |
 
 ---
 
@@ -121,11 +127,73 @@ under one, meaning that on most boards where the stem is present, *nothing* in i
 Two-letter stems behave as §7.5 predicts — 17 to 37 members findable, far too many to act on, which
 confirms the reason `-RS` is useless as a hunting cue.
 
-**Sampling caveat, and it cuts toward optimism being wrong:** family stems were sampled broadly
-across the index rather than weighted toward common stems. A curated curriculum would pick the
-productive stems, which have higher enumerability than this average. So treat the 4–6 letter numbers
-as a lower bound — but the gap to the target band is large (0.29 against a target of 2), and
-plausible curation will not close a 7× gap.
+**Sampling caveat:** family stems were sampled broadly across the index rather than weighted toward
+productive stems. A curated curriculum would pick better stems, so these are a lower bound.
+
+The table above counts a word-stem as a member of its own family; §4.1 does not, which is why its
+`broad` column reads slightly lower (2.83 against 3.13 at 3 letters). §4.1 is the comparable one.
+
+### 4.1 Under curation — and the caveat above was half wrong
+
+The broad sample is what produced "4-to-6 letter stems are useless", and that finding reshapes the
+curriculum, so it was remeasured against the population a curriculum would actually draw from.
+Stems were ranked by **productivity**: distinct valid completions in CSW21, weighted by what those
+completions score, so a family of six 7-letter words outranks a family of six 3-letter ones. Top N
+per stem length. Four samples, all tallied on the **same boards in one pass**, so the only thing
+that varies across the columns is curation. 30,000 boards per cell, six cells (`runs/m3-curated`).
+
+| sample | what it is |
+| --- | --- |
+| `broad` | stride through the family index — the §4 numbers above |
+| `curated` | top 2,000 per length by weighted productivity |
+| `curatedTight` | top 500 per length — is curation depth a gradient? |
+| `curatedWord` | top 2,000 per length among stems that are **themselves valid words** |
+
+`curatedWord` exists because the unrestricted ranking selects morphological tails — `TION`, `NESS`,
+`ATIO`, `SSES`, `ISATIO` — which are real hunting cues but are not what §7.5 means by a stem to
+teach. Restricted to words, the same ranking gives `GRAPH`, `INTER`, `UNDER`, `RATION`, `NATION`,
+`ABILITY`, `COUNTER`.
+
+**One correction before the numbers.** A stem that is itself a word belongs to its own family and is
+found whenever it has a path, contributing a guaranteed 1 that a fragment stem can never score.
+Counting it would credit curation with a floor it did not earn — 5-letter `curatedWord` reads 2.04
+with the stem counted and 0.99 without. Everything below **excludes the stem itself**, which is what
+§7.5 is asking anyway: what *else* does this stem get you.
+
+Range across the six cells, poorest (4x4 Casual) to richest (5x5 Spam):
+
+| stem length | broad | curated | curatedTight | curatedWord |
+| --- | --- | --- | --- | --- |
+| 2 | 17.10–36.93 | 17.20–37.68 | 17.44–38.13 | 26.30–58.72 |
+| **3** | **2.83–5.63** | **4.46–8.93** | 6.65–13.76 | **5.26–10.29** |
+| **4** | 0.82–1.50 | **1.85–3.70** | **2.44–5.11** | **2.03–3.68** |
+| 5 | 0.33–0.64 | 0.86–1.70 | 1.13–2.41 | 1.04–1.84 |
+| 6 | 0.20–0.36 | 0.49–0.98 | 0.55–1.25 | 0.74–1.24 |
+| 7 | 0.24–0.39 | 0.33–0.74 | 0.39–1.00 | 0.58–0.90 |
+
+**The answer to the narrow question: 4-letter stems reach the band, 5-letter stems do not.**
+
+- **4-letter stems clear 2 in every cell** under both `curatedTight` (min 2.44) and `curatedWord`
+  (min 2.03). Against the broad sample's 0.99 this is a 2.5–3.4× lift. My earlier claim that
+  "plausible curation will not close a 7× gap" was wrong for this length — curation closes it.
+- **5-letter stems roughly triple but stay short.** Only one cell of six clears 2 (5x5 Spam under
+  `curatedTight`, 2.41); `curatedWord` peaks at 1.84. They are not a hunting cue outside Spam.
+- **6- and 7-letter stems stay dead.** Best case 1.25. Curation lifts them proportionally but from
+  a base so low it does not matter.
+- **3-letter stems are the strongest, and can be over-curated.** `curatedTight` pushes 5x5 Spam to
+  13.76 — out the *top* of the 2-to-6 band. The band has two edges, and the tightest 3-letter stems
+  cross the upper one.
+
+**So §7.5.1's "roughly the 4-to-6-letter band" is half right.** Four is in, five is marginal and
+Spam-only, six is out. The usable band is **3 to 4 letters**, with 5 available as Spam-tier material.
+§7.5's cutoff should be set there.
+
+**Two secondary findings the curriculum can use.** Curation depth is a **gradient**, not a
+threshold: `curatedTight` beats `curated` at every length ≥ 3, in every cell. A shorter stem list
+is a better stem list, so the curriculum can trade coverage for quality rather than needing a large
+one. And at equal list size, **word-stems beat fragment-stems at every length ≥ 4** (`curatedWord`
+above `curated` throughout) — the stems that are pedagogically natural are also the better cues, so
+teachability and measured quality do not pull against each other here.
 
 **The N-quartile split found nothing here.** Splitting Spam at the quartiles of realized N gives
 0.68 / 0.68 / 0.71 / 0.69 for 5-letter stems — flat. The same split *does* move board potential
@@ -134,7 +202,7 @@ enumerability is insensitive to the N draw.
 
 ---
 
-## 5. Benchmarks
+## 6. Benchmarks
 
 Solve time on generated boards, single-threaded, release, p50 / p95 microseconds:
 
@@ -169,7 +237,7 @@ DAWG: 79,807 states, 191,740 edges, **1.34 MB**, ~120 ms to build.
 
 ---
 
-## 6. Recon verdict on LetterCounter
+## 7. Recon verdict on LetterCounter
 
 `bogwords.txt` is Collins 21 — 279,496 words, sorted, deduped, and containing the CSW21-only short
 words (ZA, QI, EW, OK, ZAS, QIS) that distinguish it from TWL. Not provisional.
@@ -190,7 +258,7 @@ and `sim_summary.json`'s word list is truncated to 50, so neither is a ground-tr
 
 ---
 
-## 7. What the data supports, and what it does not
+## 8. What the data supports, and what it does not
 
 **Supported:**
 
@@ -208,8 +276,10 @@ and `sim_summary.json`'s word list is truncated to 50, so neither is a ground-tr
 - **§7.6's cellmate expectation is wrong.** 5-letter anagrams are 0.414, below the spec's own 0.5
   teaching threshold, not "high". The cellmate curriculum above 4 letters mostly does not survive its
   own rule.
-- **§7.5.1's 4-to-6-letter stem band is wrong.** Only 3-letter stems land in the 2-to-6 enumerability
-  target. Four-letter stems give ~1 findable member, five- and six-letter stems well under 1.
+- **§7.5.1's 4-to-6-letter stem band is half wrong** (§4.1). Under curation by weighted productivity,
+  4-letter stems *do* reach the 2-to-6 target (2.03–5.11 against the broad sample's 0.99), but
+  5-letter stems clear it in only one cell of six and 6-letter stems stay under 1.25. The usable band
+  is **3 to 4 letters**, with 5 as Spam-tier material — not 4 to 6.
 - **§14.4's "under 1 MB" for the DAWG.** Measured 1.34 MB. Already corrected in the spec; irrelevant
   in a 100 MB bundle.
 - **§11.1's constrained Spam generation.** Effectively infeasible as written: 0.6% of constrained
@@ -223,12 +293,14 @@ and `sim_summary.json`'s word list is truncated to 50, so neither is a ground-tr
 - The letter distribution (§2.4). Everything above is provisional on it. §16.2's suggestion of
   recording 50 real ranked boards by hand remains the cheapest way to detect a badly wrong one, and
   is worth doing before Phase 3.
-- Whether a curated stem set lifts M3's 4–6 letter enumerability into the target band. The broad
-  sample says no by a factor of 7, but the sample is not the curriculum.
+- Which *specific* stems the curriculum ships. §4.1 establishes that curation by weighted
+  productivity lifts 4-letter stems into the band, but it ranks the whole dictionary mechanically; a
+  hand-checked list would differ at the margins. The measurement says the population is viable, not
+  that any particular stem is.
 
 ---
 
-## 8. Reproducing
+## 9. Reproducing
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j 14
