@@ -133,16 +133,26 @@ struct CellTallies {
     // M3, tallied once per stem sample (see kSampleNames). The broad sample
     // and the curated one are measured on the SAME boards in the same pass,
     // so the difference between the two tables is curation and nothing else.
+    //
+    // memberSum counts every findable family member; memberSumOther excludes
+    // the stem itself. The two differ only for stems that ARE words, where
+    // the stem is a member of its own family and is found whenever it has a
+    // path -- a guaranteed 1 that a fragment stem like ATIO can never score.
+    // Comparing a word-stem sample against a fragment sample on memberSum
+    // alone would credit curation with that floor, so memberSumOther is the
+    // honest column: what ELSE the stem gets you, which is what 7.5 is asking.
     struct M3Tally {
-        std::vector<uint64_t> stemPresent, memberSum;  // by stem length
-        std::vector<uint64_t> stemPresentQ[4], memberSumQ[4];  // split at N quartiles
+        std::vector<uint64_t> stemPresent, memberSum, memberSumOther;  // by stem length
+        std::vector<uint64_t> stemPresentQ[4], memberSumQ[4], memberSumOtherQ[4];  // by N quartile
 
         void init() {
             stemPresent.assign(kMaxStemLen + 1, 0);
             memberSum.assign(kMaxStemLen + 1, 0);
+            memberSumOther.assign(kMaxStemLen + 1, 0);
             for (int q = 0; q < 4; ++q) {
                 stemPresentQ[q].assign(kMaxStemLen + 1, 0);
                 memberSumQ[q].assign(kMaxStemLen + 1, 0);
+                memberSumOtherQ[q].assign(kMaxStemLen + 1, 0);
             }
         }
 
@@ -150,9 +160,11 @@ struct CellTallies {
             for (size_t i = 0; i < stemPresent.size(); ++i) {
                 stemPresent[i] += other.stemPresent[i];
                 memberSum[i] += other.memberSum[i];
+                memberSumOther[i] += other.memberSumOther[i];
                 for (int q = 0; q < 4; ++q) {
                     stemPresentQ[q][i] += other.stemPresentQ[q][i];
                     memberSumQ[q][i] += other.memberSumQ[q][i];
+                    memberSumOtherQ[q][i] += other.memberSumOtherQ[q][i];
                 }
             }
         }
@@ -362,7 +374,9 @@ int main(int argc, char** argv) {
     }
 
     // --- M3 candidate stems: two samples, measured on the same boards -------
-    struct M3Stem { std::string text; std::vector<uint32_t> members; };
+    // selfId is the stem's own word id when the stem is itself a word, so it
+    // can be discounted from its own family; 0xFFFFFFFF for fragment stems.
+    struct M3Stem { std::string text; std::vector<uint32_t> members; uint32_t selfId; };
     std::vector<M3Stem> m3Stems[kSampleCount];
 
     auto takeStem = [&](size_t family) -> M3Stem {
@@ -371,6 +385,9 @@ int main(int argc, char** argv) {
         uint32_t count = 0;
         const uint32_t* members = families.members(family, &count);
         stem.members.assign(members, members + count);
+        stem.selfId = 0xFFFFFFFFu;
+        uint32_t id = 0;
+        if (dawg.findWordId(stem.text.c_str(), stem.text.size(), &id)) stem.selfId = id;
         return stem;
     };
 
@@ -644,15 +661,19 @@ int main(int argc, char** argv) {
                                          static_cast<uint8_t>(stem.text.size()), letterCounts)) {
                             continue;
                         }
-                        uint32_t findable = 0;
+                        uint32_t findable = 0, findableOther = 0;
                         for (const uint32_t member : stem.members) {
-                            if (slotOf.count(member)) ++findable;
+                            if (!slotOf.count(member)) continue;
+                            ++findable;
+                            if (member != stem.selfId) ++findableOther;
                         }
                         const size_t len = stem.text.size();
                         ++m3.stemPresent[len];
                         m3.memberSum[len] += findable;
+                        m3.memberSumOther[len] += findableOther;
                         ++m3.stemPresentQ[quartile][len];
                         m3.memberSumQ[quartile][len] += findable;
+                        m3.memberSumOtherQ[quartile][len] += findableOther;
                     }
                 }
             },
@@ -684,7 +705,8 @@ int main(int argc, char** argv) {
 
     reach << "grid\ttier\tbreakdown\tkey\tstemPaths\tpathHits\tpPerPath\tstemBoards\tboardHits\tpPerBoard\n";
     cellmates << "grid\ttier\trelation\tlen\ttrials\thits\tp\n";
-    familyStats << "grid\ttier\tsample\tstemLen\tnQuartile\tstemPresent\tmemberSum\tenumerability\n";
+    familyStats << "grid\ttier\tsample\tstemLen\tnQuartile\tstemPresent\tmemberSum\tenumerability"
+                   "\tmemberSumOther\tenumerabilityOther\n";
 
     auto emitReach = [&](std::ofstream& out, const std::string& lead, const char* kind,
                          const std::string& key, const ReachTally& tally) {
@@ -728,12 +750,18 @@ int main(int argc, char** argv) {
                             << m3.memberSum[len] << '\t'
                             << static_cast<double>(m3.memberSum[len]) /
                                    static_cast<double>(m3.stemPresent[len])
+                            << '\t' << m3.memberSumOther[len] << '\t'
+                            << static_cast<double>(m3.memberSumOther[len]) /
+                                   static_cast<double>(m3.stemPresent[len])
                             << '\n';
                 for (int q = 0; q < 4; ++q) {
                     if (m3.stemPresentQ[q][len] == 0) continue;
                     familyStats << m3Lead << '\t' << len << "\tQ" << (q + 1) << '\t'
                                 << m3.stemPresentQ[q][len] << '\t' << m3.memberSumQ[q][len] << '\t'
                                 << static_cast<double>(m3.memberSumQ[q][len]) /
+                                       static_cast<double>(m3.stemPresentQ[q][len])
+                                << '\t' << m3.memberSumOtherQ[q][len] << '\t'
+                                << static_cast<double>(m3.memberSumOtherQ[q][len]) /
                                        static_cast<double>(m3.stemPresentQ[q][len])
                                 << '\n';
                 }
@@ -786,7 +814,10 @@ int main(int argc, char** argv) {
     // M3, broad against curated, same boards. 7.5.1 predicts the 4-to-6 band
     // survives; the broad sample said only 3-letter stems reach it. If that
     // was a sampling artefact, curation moves these columns apart.
-    std::fprintf(stderr, "\n==== M3 enumerability: E[members findable | stem present] ====\n");
+    std::fprintf(stderr,
+                 "\n==== M3 enumerability: E[OTHER members findable | stem present] ====\n"
+                 "  (excludes the stem itself, which a word stem always finds and a\n"
+                 "   fragment stem never can; family_stats.tsv carries both columns)\n");
     std::fprintf(stderr, "  %-16s %8s", "cell", "stemLen");
     for (size_t s = 0; s < kSampleCount; ++s) std::fprintf(stderr, " %13s", kSampleNames[s]);
     std::fprintf(stderr, " %14s\n", "tight/broad");
@@ -800,7 +831,8 @@ int main(int argc, char** argv) {
             for (size_t s = 0; s < kSampleCount; ++s) {
                 const CellTallies::M3Tally& m3 = cellResults[c].m3[s];
                 if (m3.stemPresent[len] == 0) continue;
-                value[s] = static_cast<double>(m3.memberSum[len]) /
+                // Ex-self, so a word stem is not credited with finding itself.
+                value[s] = static_cast<double>(m3.memberSumOther[len]) /
                            static_cast<double>(m3.stemPresent[len]);
                 any = true;
             }
