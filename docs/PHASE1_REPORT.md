@@ -202,6 +202,70 @@ enumerability is insensitive to the N draw.
 
 ---
 
+## 5. The full simulation run
+
+`runs/full`: **5.2M boards** — 1M per cell, 200k for 4x4 Spam per §5.3's stratification, since that
+cell draws N from [144, 625] and costs roughly 7× a Casual board. 31 minutes on 14 threads, root
+seed 20260917.
+
+`board_norms`, means with p10–p90 in brackets:
+
+| cell | total points | words | 5+ words | seeded | mean N |
+| --- | --- | --- | --- | --- | --- |
+| 4x4 Casual | 194,148 [116,900–285,400] | 287 | 129 | 68.4% | 5.0 |
+| 4x4 Good Casual | 252,258 [174,600–342,500] | 348 | 171 | 74.6% | 15.0 |
+| 4x4 Spam | 423,476 [347,700–509,400] | 508 | 288 | 86.5% | 384.6 |
+| 5x5 Casual | 394,397 [233,600–582,600] | 517 | 261 | 62.6% | 3.0 |
+| 5x5 Good Casual | 569,607 [414,300–748,300] | 675 | 379 | 72.8% | 81.0 |
+| 5x5 Spam | 754,387 [611,200–921,000] | 827 | 499 | 80.7% | 81.0 |
+
+Tier ordering holds on every metric on both grids, and 4x4 Spam's mean realized N is **384.6**
+against the 384.5 a uniform draw over [144, 625] predicts — the draw is doing what §2.3 says.
+
+**Reproducibility: verified at scale.** The same run at **6 threads** produced `word_stats.tsv`
+(1,039,718 lines), `board_norms.tsv` and `board_norms_by_n.tsv` **byte-identical** to the 14-thread
+run. The manifests differ only in `threads`, `wallSeconds`, `outputDir` and the timestamp. This is
+the property the board-index RNG streams were chosen for over per-thread streams, now confirmed on
+5.2M boards rather than the pilot's 1,800.
+
+**Two findings §5.3 asked for by name.**
+
+*Seeded boards dominate the winners.* The base seed rate is 50% (`probabilityPerMille: 500`), and
+each of the N candidates draws its own seed independently — but **63% to 87% of boards that win
+their best-of-N carry one**, rising monotonically with tier to 86.5% at 4x4 Spam. §5.3 said that if
+seeded boards dominate Spam far beyond the 50% base rate, it is "a real finding about what Spam
+boards *are*, not a generator bug". It is the finding: at Spam tier, a high-potential board is
+mostly a *seeded* board, so the seed table is not a garnish on the generator, it is most of what
+makes the tier.
+
+*Spam is a spread, and N moves it.* Splitting 4x4 Spam at the quartiles of realized N:
+
+| quartile | N range | mean points | boards |
+| --- | --- | --- | --- |
+| Q1 | 144–264 | 394,693 | 50,242 |
+| Q2 | 264–385 | 418,810 | 50,513 |
+| Q3 | 385–505 | 434,247 | 50,236 |
+| Q4 | 505–625 | 446,239 | 50,242 |
+
+A 13% spread in mean potential across the draw, with the increments shrinking (24k, 15k, 12k) — the
+familiar diminishing return of best-of-N. Averaging over the draw would have hidden it, which is why
+§5.3 requires the split.
+
+**One number the spec got wrong in the other direction.** §5.3 expects the 1e-5 retention threshold
+to leave "60k to 120k surviving words". It leaves **221,430** — 79% of CSW21. At 1M boards per cell
+the resolution is fine enough that almost everything clears 1e-5, so the threshold is not doing the
+filtering §5.3 assumed. If the intent was "the set worth showing a human", that set has to be cut by
+something else — points, or P(appear) at a threshold two orders of magnitude higher.
+
+**A manifest caveat for these three runs.** The `startedUtc` field was being written when the
+manifest was written, i.e. at run *end*, so in `runs/full`, `runs/full-verify` and `runs/m3-curated`
+it records the finish time; the true start is `startedUtc − wallSeconds`. Fixed in the tools, but the
+existing artifacts were not regenerated for a timestamp label — nothing about reproducing a run
+depends on it, since that needs the seed, config hash, dictionary hash and git SHA, all of which are
+correct.
+
+---
+
 ## 6. Benchmarks
 
 Solve time on generated boards, single-threaded, release, p50 / p95 microseconds:
@@ -265,9 +329,11 @@ and `sim_summary.json`'s word list is truncated to 50, so neither is a ground-tr
 - **The free-vocabulary thesis (§3.5).** 5.5 reachable extensions per found stem, 38–46% of findable
   words free. Nowhere near the 2-per-game kill threshold.
 - **Tier ordering.** Spam > Good Casual > Casual on every metric, both grids.
-- **Seeded-board overrepresentation (§2.3).** 50.1% of candidates carry a seed; 66–89% of *winners*
-  do, rising with tier. Selection after seeding does what the ruling predicted.
-- **Spam is a spread, not a point.** Mean potential moves 400,831 → 442,730 across the quartiles of N.
+- **Seeded-board overrepresentation (§2.3).** 50% of candidates carry a seed; **63–87% of *winners*
+  do**, rising monotonically with tier to 86.5% at 4x4 Spam (§5, 5.2M boards). Selection after
+  seeding does what the ruling predicted, and more strongly than expected.
+- **Spam is a spread, not a point.** Mean potential moves 394,693 → 446,239 across the quartiles of
+  realized N, with diminishing increments (§5).
 - **Solver and generation performance.** Both comfortably inside target; the simulator is ~6.5×
   cheaper than the spec's compute budget assumed.
 
@@ -280,6 +346,9 @@ and `sim_summary.json`'s word list is truncated to 50, so neither is a ground-tr
   4-letter stems *do* reach the 2-to-6 target (2.03–5.11 against the broad sample's 0.99), but
   5-letter stems clear it in only one cell of six and 6-letter stems stay under 1.25. The usable band
   is **3 to 4 letters**, with 5 as Spam-tier material — not 4 to 6.
+- **§5.3's word-retention estimate.** The 1e-5 threshold was expected to leave 60k–120k words; it
+  leaves **221,430**, 79% of CSW21. The threshold is not the filter §5.3 assumed it was, so "the set
+  worth showing a human" needs a different cut.
 - **§14.4's "under 1 MB" for the DAWG.** Measured 1.34 MB. Already corrected in the spec; irrelevant
   in a 100 MB bundle.
 - **§11.1's constrained Spam generation.** Effectively infeasible as written: 0.6% of constrained
@@ -310,12 +379,14 @@ ctest --test-dir build --output-on-failure
 ./build/tools/simulate/simulate --config config/ruleset_v1.json --dawg csw21.dawg \
     --out runs/full --boards-per-cell 1000000 --boards 4x4:spam=200000 --threads 14
 ./build/tools/measure/measure  --config config/ruleset_v1.json --dawg csw21.dawg \
-    --out runs/measure --boards-per-cell 5000 --stems 3000 --threads 14
+    --out runs/m3-curated --boards-per-cell 30000 --stems 3000 \
+    --curated-per-len 2000 --curated-tight 500 --threads 14 --seed 20260917
 ```
 
 Every run writes `manifest.json` with config hash, dictionary hash, git SHA (with a dirty flag),
 root seed, per-cell counts, thread count and wall time. Output is byte-identical at any thread count
-for the same root seed — verified at 1 and 14 threads across all three simulator data files.
+for the same root seed — verified on the full 5.2M-board run at 14 and 6 threads across all three
+simulator data files (§5), and earlier at 1 and 14 threads on the pilot.
 
 Test suite: 1,425,935 checks across five suites, including a brute-force differential oracle that
 enumerates 62.5M paths with no DAWG and agrees with the solver exactly.

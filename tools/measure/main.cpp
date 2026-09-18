@@ -302,6 +302,8 @@ int main(int argc, char** argv) {
     }
 
     const auto runStart = std::chrono::steady_clock::now();
+    // See the note in simulate: this is the run's start, not the manifest's.
+    const std::string startedUtc = utcTimestamp();
     std::fprintf(stderr, "measure: building lexicon indices...\n");
 
     SubwordIndex subwords;
@@ -862,7 +864,7 @@ int main(int argc, char** argv) {
     manifest.rootSeed = rootSeed;
     manifest.threads = threads;
     manifest.wallSeconds = wallSeconds;
-    manifest.startedUtc = utcTimestamp();
+    manifest.startedUtc = startedUtc;
     for (size_t c = 0; c < cells.size(); ++c) {
         manifest.boardsPerCell.emplace_back(
             std::to_string(cells[c].first) + "x" + std::to_string(cells[c].first) + ":" +

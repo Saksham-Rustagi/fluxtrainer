@@ -198,6 +198,10 @@ int main(int argc, char** argv) {
     }
 
     const auto runStart = std::chrono::steady_clock::now();
+    // Captured here, not at manifest-writing time: the field is named
+    // startedUtc and a manifest that records the finish time under that
+    // name misdescribes its own run.
+    const std::string startedUtc = utcTimestamp();
     std::vector<CellResult> results;
 
     for (size_t c = 0; c < cells.size(); ++c) {
@@ -399,7 +403,7 @@ int main(int argc, char** argv) {
     manifest.rootSeed = rootSeed;
     manifest.threads = threads;
     manifest.wallSeconds = wallSeconds;
-    manifest.startedUtc = utcTimestamp();
+    manifest.startedUtc = startedUtc;
     for (const CellResult& cell : results) {
         manifest.boardsPerCell.emplace_back(cellName(cell.side, cell.tier), cell.boards);
     }
