@@ -77,6 +77,29 @@ struct M1Stem {
     std::vector<uint16_t> affixIndex;  // parallel to extensions; mined affix, or 0xFFFF
 };
 
+// M3 is measured over two stem populations, because which one you sample
+// decides the answer. `broad` strides the whole family index and is what the
+// first Phase 1 report used. `curated` is the population a real curriculum
+// would draw from: stems ranked by productivity, meaning the number of
+// distinct valid completions they have in CSW21 weighted by the points those
+// completions score, top few thousand per stem length.
+// Two curated depths rather than one, because "curate harder" is a lever the
+// curriculum can actually pull: if the tight set beats the wide one, depth is
+// a gradient and 7.5's cutoff can be bought with a shorter stem list.
+//
+// `curatedWord` applies the identical ranking to stems that are themselves
+// valid words. It exists because the unrestricted ranking turns out to select
+// morphological tails -- TION, NESS, ATIO, SSES -- which are legitimate
+// hunting cues but are not what 7.5 means by a stem to teach. If the two
+// curated columns disagree, the curriculum implication differs by which
+// population it draws from, and the report has to say which.
+constexpr size_t kSampleCount = 4;
+constexpr size_t kBroad = 0;
+constexpr size_t kCurated = 1;
+constexpr size_t kCuratedTight = 2;
+constexpr size_t kCuratedWord = 3;
+const char* const kSampleNames[kSampleCount] = {"broad", "curated", "curatedTight", "curatedWord"};
+
 // Per-(stem, affix) tallies. Two conditionings are reported because the spec
 // does not disambiguate them and they differ: per-PATH is the honest
 // free-points number (your finger is on that path), per-BOARD is the upper
@@ -107,9 +130,34 @@ struct CellTallies {
     uint64_t dropTerminalSourceWords = 0;
     uint64_t boardsForCellmates = 0;
 
-    // M3
-    std::vector<uint64_t> stemPresent, memberSum;  // by stem length
-    std::vector<uint64_t> stemPresentQ[4], memberSumQ[4];  // split at N quartiles
+    // M3, tallied once per stem sample (see kSampleNames). The broad sample
+    // and the curated one are measured on the SAME boards in the same pass,
+    // so the difference between the two tables is curation and nothing else.
+    struct M3Tally {
+        std::vector<uint64_t> stemPresent, memberSum;  // by stem length
+        std::vector<uint64_t> stemPresentQ[4], memberSumQ[4];  // split at N quartiles
+
+        void init() {
+            stemPresent.assign(kMaxStemLen + 1, 0);
+            memberSum.assign(kMaxStemLen + 1, 0);
+            for (int q = 0; q < 4; ++q) {
+                stemPresentQ[q].assign(kMaxStemLen + 1, 0);
+                memberSumQ[q].assign(kMaxStemLen + 1, 0);
+            }
+        }
+
+        void merge(const M3Tally& other) {
+            for (size_t i = 0; i < stemPresent.size(); ++i) {
+                stemPresent[i] += other.stemPresent[i];
+                memberSum[i] += other.memberSum[i];
+                for (int q = 0; q < 4; ++q) {
+                    stemPresentQ[q][i] += other.stemPresentQ[q][i];
+                    memberSumQ[q][i] += other.memberSumQ[q][i];
+                }
+            }
+        }
+    };
+    M3Tally m3[kSampleCount];
 
     void init(size_t affixes) {
         byAffix.assign(affixes, {});
@@ -118,12 +166,7 @@ struct CellTallies {
         anagramHits.assign(fluxcore::kMaxCells + 1, 0);
         interiorTrials.assign(fluxcore::kMaxCells + 1, 0);
         interiorHits.assign(fluxcore::kMaxCells + 1, 0);
-        stemPresent.assign(kMaxStemLen + 1, 0);
-        memberSum.assign(kMaxStemLen + 1, 0);
-        for (int q = 0; q < 4; ++q) {
-            stemPresentQ[q].assign(kMaxStemLen + 1, 0);
-            memberSumQ[q].assign(kMaxStemLen + 1, 0);
-        }
+        for (M3Tally& tally : m3) tally.init();
     }
 
     void merge(const CellTallies& other) {
@@ -149,14 +192,7 @@ struct CellTallies {
         dropTerminalBoards += other.dropTerminalBoards;
         dropTerminalSourceWords += other.dropTerminalSourceWords;
         boardsForCellmates += other.boardsForCellmates;
-        for (size_t i = 0; i < stemPresent.size(); ++i) {
-            stemPresent[i] += other.stemPresent[i];
-            memberSum[i] += other.memberSum[i];
-            for (int q = 0; q < 4; ++q) {
-                stemPresentQ[q][i] += other.stemPresentQ[q][i];
-                memberSumQ[q][i] += other.memberSumQ[q][i];
-            }
-        }
+        for (size_t s = 0; s < kSampleCount; ++s) m3[s].merge(other.m3[s]);
     }
 };
 
@@ -204,6 +240,8 @@ int main(int argc, char** argv) {
     uint64_t boardsPerCell = 4000;
     uint64_t rootSeed = 1;
     uint32_t stemBudget = 3000;
+    uint32_t curatedPerLen = 2000;
+    uint32_t curatedTight = 500;
     unsigned threads = std::thread::hardware_concurrency();
     if (threads == 0) threads = 1;
 
@@ -219,10 +257,15 @@ int main(int argc, char** argv) {
         else if (arg == "--boards-per-cell") boardsPerCell = std::stoull(next("--boards-per-cell"));
         else if (arg == "--seed") rootSeed = std::stoull(next("--seed"));
         else if (arg == "--stems") stemBudget = static_cast<uint32_t>(std::stoul(next("--stems")));
+        else if (arg == "--curated-per-len")
+            curatedPerLen = static_cast<uint32_t>(std::stoul(next("--curated-per-len")));
+        else if (arg == "--curated-tight")
+            curatedTight = static_cast<uint32_t>(std::stoul(next("--curated-tight")));
         else if (arg == "--threads") threads = static_cast<unsigned>(std::stoul(next("--threads")));
         else {
             std::cerr << "usage: measure --config <f> --dawg <f> --out <dir> "
-                         "[--boards-per-cell N] [--stems N] [--threads T] [--seed S]\n";
+                         "[--boards-per-cell N] [--stems N] [--curated-per-len N] "
+                         "[--curated-tight N] [--threads T] [--seed S]\n";
             return 1;
         }
     }
@@ -318,35 +361,117 @@ int main(int argc, char** argv) {
         }
     }
 
-    // --- M3 candidate stems: bounded, stratified by stem length -------------
+    // --- M3 candidate stems: two samples, measured on the same boards -------
     struct M3Stem { std::string text; std::vector<uint32_t> members; };
-    std::vector<M3Stem> m3Stems;
+    std::vector<M3Stem> m3Stems[kSampleCount];
+
+    auto takeStem = [&](size_t family) -> M3Stem {
+        M3Stem stem;
+        stem.text = families.stem(family);
+        uint32_t count = 0;
+        const uint32_t* members = families.members(family, &count);
+        stem.members.assign(members, members + count);
+        return stem;
+    };
+
+    // Broad: stride the family index so the sample spreads across the
+    // alphabet rather than piling into the A's. Unchanged from the first
+    // report, so its numbers reproduce.
     {
         std::vector<uint32_t> perLen(kMaxStemLen + 1, 0);
         const uint32_t perLenCap = stemBudget / kMaxStemLen + 1;
-        // Walk families in stride so the sample is spread across the
-        // alphabet rather than concentrated in the A's.
         const size_t total = families.familyCount();
         const size_t stride = total > stemBudget * 8 ? total / (stemBudget * 8) : 1;
-        for (size_t f = 0; f < total && m3Stems.size() < stemBudget; f += stride) {
+        for (size_t f = 0; f < total && m3Stems[kBroad].size() < stemBudget; f += stride) {
             const std::string text = families.stem(f);
             if (text.size() < 2 || text.size() > kMaxStemLen) continue;
             if (perLen[text.size()] >= perLenCap) continue;
             uint32_t count = 0;
+            families.members(f, &count);
+            if (count < 2) continue;
+            ++perLen[text.size()];
+            m3Stems[kBroad].push_back(takeStem(f));
+        }
+    }
+
+    // Curated: rank by productivity, not by frequency. A stem's productivity
+    // is the number of distinct valid completions it has, weighted by what
+    // those completions score -- a stem whose family is six 3-letter words is
+    // worth less to teach than one whose family is six 7-letter words, and
+    // raw family size cannot tell them apart. Top `curatedPerLen` per length.
+    {
+        std::vector<uint8_t> lenOf(dawg.wordCount(), 0);
+        char buf[64];
+        for (uint32_t id = 0; id < dawg.wordCount(); ++id) {
+            lenOf[id] = static_cast<uint8_t>(dawg.wordForId(id, buf, sizeof(buf)));
+        }
+
+        std::vector<std::pair<uint64_t, uint32_t>> ranked[kMaxStemLen + 1];      // (points, family)
+        std::vector<std::pair<uint64_t, uint32_t>> rankedWord[kMaxStemLen + 1];  // stems that are words
+        for (size_t f = 0; f < families.familyCount(); ++f) {
+            const std::string text = families.stem(f);
+            if (text.size() < 2 || text.size() > kMaxStemLen) continue;
+            uint32_t count = 0;
             const uint32_t* members = families.members(f, &count);
             if (count < 2) continue;
-            M3Stem stem;
-            stem.text = text;
-            stem.members.assign(members, members + count);
-            ++perLen[text.size()];
-            m3Stems.push_back(std::move(stem));
+            uint64_t points = 0;
+            for (uint32_t m = 0; m < count; ++m) {
+                points += loaded.config.scores.points(lenOf[members[m]]);
+            }
+            ranked[text.size()].emplace_back(points, static_cast<uint32_t>(f));
+            uint32_t stemId = 0;
+            if (dawg.findWordId(text.c_str(), text.size(), &stemId)) {
+                rankedWord[text.size()].emplace_back(points, static_cast<uint32_t>(f));
+            }
+        }
+
+        // Ties broken by family index so the sample is deterministic.
+        auto byPoints = [](const auto& a, const auto& b) {
+            if (a.first != b.first) return a.first > b.first;
+            return a.second < b.second;
+        };
+        // Print the head of each length so the curation is auditable by eye
+        // rather than taken on trust.
+        auto head = [&](const char* label, uint8_t len,
+                        const std::vector<std::pair<uint64_t, uint32_t>>& list, size_t take) {
+            std::fprintf(stderr, "  %s %u-letter head:", label, len);
+            for (size_t i = 0; i < std::min<size_t>(8, take); ++i) {
+                std::fprintf(stderr, " %s(%llu)", families.stem(list[i].second).c_str(),
+                             static_cast<unsigned long long>(list[i].first));
+            }
+            std::fprintf(stderr, "  [%zu ranked]\n", list.size());
+        };
+
+        for (uint8_t len = 2; len <= kMaxStemLen; ++len) {
+            auto& list = ranked[len];
+            const size_t take = std::min<size_t>(curatedPerLen, list.size());
+            std::partial_sort(list.begin(), list.begin() + take, list.end(), byPoints);
+            head("curated    ", len, list, take);
+            const size_t tight = std::min<size_t>(curatedTight, take);
+            for (size_t i = 0; i < take; ++i) {
+                M3Stem stem = takeStem(list[i].second);
+                if (i < tight) m3Stems[kCuratedTight].push_back(stem);
+                m3Stems[kCurated].push_back(std::move(stem));
+            }
+
+            auto& wordList = rankedWord[len];
+            const size_t takeWord = std::min<size_t>(curatedPerLen, wordList.size());
+            std::partial_sort(wordList.begin(), wordList.begin() + takeWord, wordList.end(),
+                              byPoints);
+            head("curatedWord", len, wordList, takeWord);
+            for (size_t i = 0; i < takeWord; ++i) {
+                m3Stems[kCuratedWord].push_back(takeStem(wordList[i].second));
+            }
         }
     }
 
     std::fprintf(stderr,
-                 "  indices ready. M1 stems %zu, M3 stems %zu, mined affixes %zu, %llu boards/cell\n",
-                 m1Stems.size(), m3Stems.size(), affixNames.size(),
-                 static_cast<unsigned long long>(boardsPerCell));
+                 "  indices ready. M1 stems %zu; M3 stems %zu broad / %zu curated (top %u per "
+                 "length) / %zu tight (top %u) / %zu word-only; mined affixes %zu; "
+                 "%llu boards/cell\n",
+                 m1Stems.size(), m3Stems[kBroad].size(), m3Stems[kCurated].size(), curatedPerLen,
+                 m3Stems[kCuratedTight].size(), curatedTight, m3Stems[kCuratedWord].size(),
+                 affixNames.size(), static_cast<unsigned long long>(boardsPerCell));
 
     SeedPool seeds;
     seeds.buildForRuleset(dawg, loaded.config);
@@ -512,20 +637,23 @@ int main(int argc, char** argv) {
                     quartile = static_cast<int>(std::min<uint32_t>(3, offset * 4 / span));
                 }
 
-                for (const M3Stem& stem : m3Stems) {
-                    if (!stemHasPath(board, geom, stem.text.c_str(),
-                                     static_cast<uint8_t>(stem.text.size()), letterCounts)) {
-                        continue;
+                for (size_t sample = 0; sample < kSampleCount; ++sample) {
+                    CellTallies::M3Tally& m3 = tally.m3[sample];
+                    for (const M3Stem& stem : m3Stems[sample]) {
+                        if (!stemHasPath(board, geom, stem.text.c_str(),
+                                         static_cast<uint8_t>(stem.text.size()), letterCounts)) {
+                            continue;
+                        }
+                        uint32_t findable = 0;
+                        for (const uint32_t member : stem.members) {
+                            if (slotOf.count(member)) ++findable;
+                        }
+                        const size_t len = stem.text.size();
+                        ++m3.stemPresent[len];
+                        m3.memberSum[len] += findable;
+                        ++m3.stemPresentQ[quartile][len];
+                        m3.memberSumQ[quartile][len] += findable;
                     }
-                    uint32_t findable = 0;
-                    for (const uint32_t member : stem.members) {
-                        if (slotOf.count(member)) ++findable;
-                    }
-                    const size_t len = stem.text.size();
-                    ++tally.stemPresent[len];
-                    tally.memberSum[len] += findable;
-                    ++tally.stemPresentQ[quartile][len];
-                    tally.memberSumQ[quartile][len] += findable;
                 }
             },
             [&](uint64_t done) {
@@ -556,7 +684,7 @@ int main(int argc, char** argv) {
 
     reach << "grid\ttier\tbreakdown\tkey\tstemPaths\tpathHits\tpPerPath\tstemBoards\tboardHits\tpPerBoard\n";
     cellmates << "grid\ttier\trelation\tlen\ttrials\thits\tp\n";
-    familyStats << "grid\ttier\tstemLen\tnQuartile\tstemPresent\tmemberSum\tenumerability\n";
+    familyStats << "grid\ttier\tsample\tstemLen\tnQuartile\tstemPresent\tmemberSum\tenumerability\n";
 
     auto emitReach = [&](std::ofstream& out, const std::string& lead, const char* kind,
                          const std::string& key, const ReachTally& tally) {
@@ -591,20 +719,24 @@ int main(int argc, char** argv) {
             }
         }
 
-        for (size_t len = 0; len < tally.stemPresent.size(); ++len) {
-            if (tally.stemPresent[len] == 0) continue;
-            familyStats << lead << '\t' << len << "\tall\t" << tally.stemPresent[len] << '\t'
-                        << tally.memberSum[len] << '\t'
-                        << static_cast<double>(tally.memberSum[len]) /
-                               static_cast<double>(tally.stemPresent[len])
-                        << '\n';
-            for (int q = 0; q < 4; ++q) {
-                if (tally.stemPresentQ[q][len] == 0) continue;
-                familyStats << lead << '\t' << len << "\tQ" << (q + 1) << '\t'
-                            << tally.stemPresentQ[q][len] << '\t' << tally.memberSumQ[q][len] << '\t'
-                            << static_cast<double>(tally.memberSumQ[q][len]) /
-                                   static_cast<double>(tally.stemPresentQ[q][len])
+        for (size_t sample = 0; sample < kSampleCount; ++sample) {
+            const CellTallies::M3Tally& m3 = tally.m3[sample];
+            const std::string m3Lead = lead + "\t" + kSampleNames[sample];
+            for (size_t len = 0; len < m3.stemPresent.size(); ++len) {
+                if (m3.stemPresent[len] == 0) continue;
+                familyStats << m3Lead << '\t' << len << "\tall\t" << m3.stemPresent[len] << '\t'
+                            << m3.memberSum[len] << '\t'
+                            << static_cast<double>(m3.memberSum[len]) /
+                                   static_cast<double>(m3.stemPresent[len])
                             << '\n';
+                for (int q = 0; q < 4; ++q) {
+                    if (m3.stemPresentQ[q][len] == 0) continue;
+                    familyStats << m3Lead << '\t' << len << "\tQ" << (q + 1) << '\t'
+                                << m3.stemPresentQ[q][len] << '\t' << m3.memberSumQ[q][len] << '\t'
+                                << static_cast<double>(m3.memberSumQ[q][len]) /
+                                       static_cast<double>(m3.stemPresentQ[q][len])
+                                << '\n';
+                }
             }
         }
     }
@@ -651,6 +783,38 @@ int main(int argc, char** argv) {
                  "  (spec 15 gate: does this imply ~2 extra words a game, or 10+?)\n",
                  weightedBoards ? weightedExtra / weightedBoards : 0.0);
 
+    // M3, broad against curated, same boards. 7.5.1 predicts the 4-to-6 band
+    // survives; the broad sample said only 3-letter stems reach it. If that
+    // was a sampling artefact, curation moves these columns apart.
+    std::fprintf(stderr, "\n==== M3 enumerability: E[members findable | stem present] ====\n");
+    std::fprintf(stderr, "  %-16s %8s", "cell", "stemLen");
+    for (size_t s = 0; s < kSampleCount; ++s) std::fprintf(stderr, " %13s", kSampleNames[s]);
+    std::fprintf(stderr, " %14s\n", "tight/broad");
+    for (size_t c = 0; c < cellResults.size(); ++c) {
+        char cell[32];
+        std::snprintf(cell, sizeof(cell), "%dx%d %s", cells[c].first, cells[c].first,
+                      tierName(cells[c].second));
+        for (size_t len = 2; len <= kMaxStemLen; ++len) {
+            double value[kSampleCount] = {};
+            bool any = false;
+            for (size_t s = 0; s < kSampleCount; ++s) {
+                const CellTallies::M3Tally& m3 = cellResults[c].m3[s];
+                if (m3.stemPresent[len] == 0) continue;
+                value[s] = static_cast<double>(m3.memberSum[len]) /
+                           static_cast<double>(m3.stemPresent[len]);
+                any = true;
+            }
+            if (!any) continue;
+            std::fprintf(stderr, "  %-16s %8zu", len == 2 ? cell : "", len);
+            for (size_t s = 0; s < kSampleCount; ++s) std::fprintf(stderr, " %13.2f", value[s]);
+            std::fprintf(stderr, " %13.2fx\n",
+                         value[kBroad] > 0 ? value[kCuratedTight] / value[kBroad] : 0.0);
+        }
+    }
+    std::fprintf(stderr,
+                 "  (7.5.1 target band is 2 to 6 findable members; the question is whether\n"
+                 "   4- and 5-letter stems reach it under curation or stay near 1)\n");
+
     Manifest manifest;
     manifest.tool = "measure";
     manifest.outputDir = outDir;
@@ -674,7 +838,15 @@ int main(int argc, char** argv) {
             boardsPerCell);
     }
     manifest.extra.emplace_back("m1Stems", std::to_string(m1Stems.size()));
-    manifest.extra.emplace_back("m3Stems", std::to_string(m3Stems.size()));
+    manifest.extra.emplace_back("m3StemsBroad", std::to_string(m3Stems[kBroad].size()));
+    manifest.extra.emplace_back("m3StemsCurated", std::to_string(m3Stems[kCurated].size()));
+    manifest.extra.emplace_back("m3StemsCuratedTight", std::to_string(m3Stems[kCuratedTight].size()));
+    manifest.extra.emplace_back("m3StemsCuratedWord", std::to_string(m3Stems[kCuratedWord].size()));
+    manifest.extra.emplace_back("curatedPerLen", std::to_string(curatedPerLen));
+    manifest.extra.emplace_back("curatedTight", std::to_string(curatedTight));
+    manifest.extra.emplace_back("curationRule",
+                                "family points = sum of scores.points(len) over members; "
+                                "top curatedPerLen per stem length");
     manifest.extra.emplace_back("minedAffixes", std::to_string(affixNames.size()));
     if (!writeManifest(manifest, outDir + "/manifest.json", &error)) {
         std::cerr << "error: " << error << "\n";
