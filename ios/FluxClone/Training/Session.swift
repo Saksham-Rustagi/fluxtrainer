@@ -28,6 +28,10 @@ final class TrainingSession: ObservableObject {
 
     enum Screen {
         case preparing(String)
+        /// One card before a hook's first drill board, saying what the drill is for in the
+        /// player's own numbers. The hook record has carried this line since Phase 2 and
+        /// nothing displayed it, which is why the drill read as teaching words he knows.
+        case brief(Hook, [SightGap], BoardScreen)
         case board(BoardScreen)
         case verdict(Verdict)
         case affixGrid(Hook, exerciseId: String, seq: Int)
@@ -47,16 +51,38 @@ final class TrainingSession: ObservableObject {
     /// already happened -- the misses were drawn on the grid.
     struct Verdict {
         let hook: Hook?
-        let found: [String]
-        let missed: [String]
+        /// Found, with seconds to find and how that compares to the last time this word
+        /// was drilled. For a word you already know, seconds is the only thing that can
+        /// move, so found/missed alone would look identical in week 1 and week 6.
+        let found: [Outcome]
+        let missed: [Outcome]
         let stemWasLit: Bool
         let score: Int
         /// The one-tap repeat. The most common action after a drill is doing it again.
         let canRepeat: Bool
+
+        struct Outcome: Identifiable {
+            let word: String
+            let seconds: Double?
+            let previousSeconds: Double?
+            let knowledge: WordKnowledge.Verdict
+            var id: String { word }
+
+            /// Only meaningful on a word the grid says you know: it is a vision result.
+            var improvement: Double? {
+                guard let seconds, let previousSeconds, previousSeconds > 0 else { return nil }
+                return previousSeconds - seconds
+            }
+        }
     }
 
     struct Summary {
         var boards = 0
+        /// How the grid sorted this session's words. The headline the player was missing:
+        /// most of what the queue teaches is words he knows and does not see.
+        var judgedKnown = 0, judgedShaky = 0, judgedUnknown = 0
+        /// Seconds to find, on words the grid says he knows.
+        var sightTimes: [Double] = []
         var judgements = 0
         var judgementsCorrect = 0
         var medianJudgementLatency: Double?
@@ -112,9 +138,12 @@ final class TrainingSession: ObservableObject {
         var plan: [Step] = []
         if !shortDay { plan.append(.warmup) }
         if let hook = newHook {
+            // The grid goes first, and it is a sorting step before it is a teaching step.
+            // It decides, per word, whether the board drill that follows is about seeing
+            // or about knowing -- which is the distinction find rate alone cannot make.
+            plan.append(.affixGrid(stem: hook.stem))
             plan.append(.drill(stem: hook.stem, attempt: 1))
             if !shortDay { plan.append(.drill(stem: hook.stem, attempt: 2)) }
-            plan.append(.affixGrid(stem: hook.stem))
         }
         if !shortDay {
             // Two acquisition boards for the due hooks, however many there are. The hooks
@@ -141,6 +170,9 @@ final class TrainingSession: ObservableObject {
     // MARK: Driving
 
     func next() { advance(to: cursor + 1) }
+
+    /// Leaves the brief and starts the board it was about.
+    func startBriefedBoard(_ state: BoardScreen) { screen = .board(state) }
 
     /// Repeat the current hook on a fresh board. Stays on the same plan step number, so a
     /// repeat does not consume the second scheduled attempt.
@@ -235,8 +267,17 @@ final class TrainingSession: ObservableObject {
         TrainingLog.startExercise(id: id, sessionId: sessionId, seq: seq, kind: mode.kind,
                                   board: board, attemptForHook: attempt,
                                   duration: mode.duration)
-        screen = .board(BoardScreen(board: board, mode: mode, exerciseId: id, step: step,
-                                    attemptForHook: attempt))
+        let screenState = BoardScreen(board: board, mode: mode, exerciseId: id, step: step,
+                                      attemptForHook: attempt)
+        // Only before the first board for a hook. The repeat is one tap and nothing else.
+        if board.purpose == .drill, attempt == 1, let hook = board.hook {
+            let gaps = SightGap.forHook(hook)
+            if !gaps.isEmpty {
+                screen = .brief(hook, gaps, screenState)
+                return
+            }
+        }
+        screen = .board(screenState)
     }
 
     // MARK: Results
@@ -274,15 +315,63 @@ final class TrainingSession: ObservableObject {
             next()
             return
         }
+
+        // Seconds to find, against the last time the same word was drilled. This is the
+        // number a vision drill moves; found/missed is not.
+        let times = Dictionary(result.found.map { ($0.word, $0.t - result.tBoardShown) },
+                               uniquingKeysWith: { a, _ in a })
+        let knowledge = board.hook.map { WordKnowledge.verdicts(forStem: $0.stem) } ?? [:]
+        let previous = Self.previousFindTimes(exerciseId: screenState.exerciseId,
+                                              words: board.targets)
+        func outcomes(_ words: [String]) -> [Verdict.Outcome] {
+            words.map { word in
+                Verdict.Outcome(word: word, seconds: times[word], previousSeconds: previous[word],
+                                knowledge: knowledge[word] ?? .unjudged)
+            }
+            .sorted { ($0.seconds ?? .greatestFiniteMagnitude) < ($1.seconds ?? .greatestFiniteMagnitude) }
+        }
+        for word in outcome.found where (knowledge[word] ?? .unjudged) == .known {
+            if let t = times[word] { summary.sightTimes.append(t) }
+        }
+
         let canRepeat = board.purpose == .drill
-        screen = .verdict(Verdict(hook: board.hook, found: outcome.found, missed: outcome.missed,
+        screen = .verdict(Verdict(hook: board.hook, found: outcomes(outcome.found),
+                                  missed: outcomes(outcome.missed),
                                   stemWasLit: board.litPath != nil, score: result.score,
                                   canRepeat: canRepeat))
+    }
+
+    /// The last time each of these words was found on an earlier exercise. Excludes the
+    /// one just played, so "faster than last time" means what it says.
+    private static func previousFindTimes(exerciseId: String, words: [String]) -> [String: Double] {
+        guard !words.isEmpty else { return [:] }
+        var out: [String: Double] = [:]
+        let list = words.map { "'" + $0.replacingOccurrences(of: "'", with: "''") + "'" }
+            .joined(separator: ",")
+        Database.shared.query("""
+            SELECT word, t_found FROM branch_event
+            WHERE word IN (\(list)) AND found = 1 AND t_found IS NOT NULL
+              AND exercise_id != ?
+            ORDER BY rowid
+            """, [exerciseId]) { row in
+            out[row.text(0)] = row.double(1)   // later rows win: the most recent attempt
+        }
+        return out
     }
 
     func affixGridFinished(exerciseId: String, correct: Int, total: Int, abandoned: Bool) {
         summary.judgements += total
         summary.judgementsCorrect += correct
+        if let stem = Self.stem(of: plan[min(cursor, plan.count - 1)]) {
+            for verdict in WordKnowledge.verdicts(forStem: stem).values {
+                switch verdict {
+                case .known: summary.judgedKnown += 1
+                case .shaky: summary.judgedShaky += 1
+                case .unknown: summary.judgedUnknown += 1
+                case .unjudged: break
+                }
+            }
+        }
         if abandoned {
             TrainingLog.finishAffixGrid(id: exerciseId, correct: correct, total: total,
                                         abandoned: true)

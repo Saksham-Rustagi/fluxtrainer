@@ -63,28 +63,78 @@ final class HookRecordTests: XCTestCase {
         }
     }
 
-    func testAffixDeckIsHalfDeadAndLeadsWithMisswipes() throws {
+    /// The live half must be the residual, in value order. The bug this replaces sorted
+    /// alphabetically, which buried STORE and STORED under PRESTORED and PROTORES and
+    /// turned a three-word problem into a 73-card deck.
+    func testDeckLeadsWithWhatTheQueueIsTeaching() throws {
         let bundle = try loaded()
-        let hook = try XCTUnwrap(bundle.hooks.first { $0.branches.contains { $0.cls == .dead } })
-        let deck = AffixGridBuilder.deck(for: hook, size: 40)
-        XCTAssertFalse(deck.isEmpty)
-        let dead = deck.filter { !$0.isLive }
-        // Dead branches carry equal weight: knowing a branch is dead is worth as much as
-        // knowing one is live.
-        XCTAssertGreaterThan(dead.count, deck.count / 3)
-        XCTAssertLessThan(dead.count, deck.count * 2 / 3 + 1)
-        // Nothing in the deck is a cellmate: an anagram is not an affix judgement.
-        XCTAssertFalse(deck.contains { $0.cls == .cellmate })
+        for hook in bundle.hooks.prefix(40) {
+            let live = AffixGridBuilder.live(for: hook)
+            XCTAssertLessThanOrEqual(live.count, AffixGridBuilder.liveCap)
+            XCTAssertTrue(live.allSatisfy { $0.isLive })
+            // Nothing already owned is on a card: SPEC 7.5.1's residual, not the family.
+            for item in live {
+                XCTAssertNotEqual(hook.branch(item.word)?.status, "known", "\(item.word)")
+            }
+            // The study items come first, in expected-gain order.
+            let study = live.compactMap { hook.branch($0.word) }
+                .filter { $0.earns && $0.expectedGain > 0 }
+            XCTAssertEqual(study.map(\.expectedGain), study.map(\.expectedGain).sorted(by: >),
+                           "\(hook.stem) is not in value order")
+        }
 
-        // A stem with misswiped strings puts them in the deck before dictionary-derived
-        // ones. Checked on a hook that actually has some.
-        if let withMisswipe = bundle.hooks.first(where: {
-            $0.branches.contains { $0.cls == .dead && $0.misswiped > 0 }
-        }) {
-            let d = AffixGridBuilder.deck(for: withMisswipe, size: 40)
-            XCTAssertTrue(d.contains { $0.fromMisswipe })
+        // TORE- is the worked example: four words carry gain and they must lead.
+        if let tore = bundle.hooks.first(where: { $0.stem == "TORE" }) {
+            let words = AffixGridBuilder.live(for: tore).map(\.word)
+            XCTAssertEqual(Array(words.prefix(4)), ["STORE", "STORES", "STORED", "STORER"])
+            XCTAssertFalse(words.contains("PROTORES"))
         }
     }
+
+    /// The dead half comes from strings the player has actually swiped, from the shipped
+    /// log and from the app's own attempts, and from nowhere else.
+    func testDeadHalfIsOnlyRealMisswipes() throws {
+        let bundle = try loaded()
+        XCTAssertGreaterThan(bundle.misswipes.count, 300, "the invalid-attempt log is shipped")
+
+        let tore = try XCTUnwrap(bundle.hooks.first { $0.stem == "TORE" })
+        // The dictionary-mined junk must not come back.
+        let shipped = AffixGridBuilder.dead(for: tore, shipped: bundle.misswipes, inApp: [:])
+        XCTAssertFalse(shipped.contains { $0.word == "TOREER" })
+        XCTAssertFalse(shipped.contains { $0.word == "GTORE" })
+        XCTAssertTrue(shipped.allSatisfy { $0.fromMisswipe && !$0.isLive })
+
+        // An attempt made in the app feeds the set, ordered by how often it was tried, and
+        // the stem's own misswipes come first however rare they are: NOTRELATED was tried
+        // nine times and still ranks below TOREE, tried once, because TOREE is about TORE.
+        let withInApp = AffixGridBuilder.dead(for: tore, shipped: ["TOREE": 1],
+                                              inApp: ["TORER": 4, "NOTRELATED": 9])
+        XCTAssertEqual(withInApp.prefix(2).map(\.word), ["TORER", "TOREE"])
+        XCTAssertEqual(withInApp.first?.ext, "-R")
+        XCTAssertEqual(withInApp.last?.word, "NOTRELATED", "borrowed to meet the floor")
+        XCTAssertEqual(withInApp.last?.ext, "your own misswipe")
+
+        // A stem with nothing logged against it still gets a few cards, borrowed from the
+        // rest of his own log: a deck whose answer is always "Word" trains pressing Word,
+        // and a fast reflexive Word reads as `known` and corrupts the sort.
+        let borrowed = AffixGridBuilder.dead(for: tore, shipped: ["RALL": 5, "SOLT": 3, "REA": 2],
+                                             inApp: [:])
+        XCTAssertEqual(borrowed.count, AffixGridBuilder.deadFloor)
+        XCTAssertTrue(borrowed.allSatisfy { $0.fromMisswipe && !$0.isLive })
+        XCTAssertEqual(borrowed.first?.word, "RALL")          // most-attempted first
+        XCTAssertEqual(borrowed.first?.ext, "your own misswipe")
+
+        // With nothing logged at all there is nothing to borrow, and that is honest.
+        XCTAssertTrue(AffixGridBuilder.dead(for: tore, shipped: [:], inApp: [:]).isEmpty)
+    }
+
+    func testExtensionDisplayReadsAgainstTheStem() {
+        XCTAssertEqual(AffixGridBuilder.extDisplay("TORER", stem: "TORE"), "-R")
+        XCTAssertEqual(AffixGridBuilder.extDisplay("STORE", stem: "TORE"), "S-")
+        XCTAssertEqual(AffixGridBuilder.extDisplay("STORED", stem: "TORE"), "S--D")
+        XCTAssertEqual(AffixGridBuilder.extDisplay("TORE", stem: "TORE"), "TORE")
+    }
+
 }
 
 /// Board geometry and the branch derivation the whole drill rests on.
@@ -215,6 +265,53 @@ final class TrainingEngineTests: XCTestCase {
     }
 }
 
+/// The know-against-see sort: SPEC 8.1's calibration, done per hook with the exercise the
+/// app already has.
+final class WordKnowledgeTests: XCTestCase {
+    func testLatencySeparatesRecognitionFromDerivation() {
+        // A fast correct call is recognition: you know the word.
+        XCTAssertEqual(WordKnowledge.classify(correct: true, latency: 0.4), .known)
+        XCTAssertEqual(WordKnowledge.classify(correct: true, latency: 1.2), .known)
+        // A slow correct call means you worked it out, which is not the same thing.
+        XCTAssertEqual(WordKnowledge.classify(correct: true, latency: 2.6), .shaky)
+        // Wrong is wrong however fast.
+        XCTAssertEqual(WordKnowledge.classify(correct: false, latency: 0.3), .unknown)
+        XCTAssertEqual(WordKnowledge.classify(correct: false, latency: 9.0), .unknown)
+    }
+
+    func testOnlyTheVocabularyVerdictsCountAsVocabulary() {
+        XCTAssertFalse(WordKnowledge.Verdict.known.isVocabulary)
+        XCTAssertTrue(WordKnowledge.Verdict.shaky.isVocabulary)
+        XCTAssertTrue(WordKnowledge.Verdict.unknown.isVocabulary)
+        XCTAssertFalse(WordKnowledge.Verdict.unjudged.isVocabulary)
+    }
+
+    /// The line the app never showed, in the player's own numbers.
+    func testSightGapReadsAsASentence() throws {
+        let bundle = try XCTUnwrap(try? HookBundle.parse())
+        let eras = try XCTUnwrap(bundle.hooks.first { $0.stem == "ERAS" })
+        let erase = try XCTUnwrap(eras.branch("ERASE"))
+        let gap = try XCTUnwrap(SightGap(branch: erase))
+        XCTAssertEqual(gap.sentence,
+                       "ERASE was on 243 of your boards. You found it twice. "
+                       + "The top 25% find it 28% of the time.")
+
+        // Worst first, by points a game rather than by raw rate difference: ERASES has a
+        // marginally wider rate gap and is on a third as many boards.
+        let gaps = SightGap.forHook(eras)
+        XCTAssertEqual(gaps.first?.word, "ERASE")
+        XCTAssertGreaterThan(gaps[0].expectedGain, gaps[1].expectedGain)
+
+        // A word with too little evidence gets no sentence rather than a made-up one.
+        let thin = Branch(word: "XYZZY", cls: .additive, ext: "", points: 800,
+                          reachability: 0.5, reachSource: "fitted", myRate: 0,
+                          topQuartileRate: 0.4, nTopQuartile: 40, presences: 3, finds: 0,
+                          opportunity: 1, presencesPerGame: 0.01, belief: 0.1,
+                          status: "unknown", expectedGain: 0, earns: true, misswiped: 0)
+        XCTAssertNil(SightGap(branch: thin))
+    }
+}
+
 /// SPEC 8.1 as Phase 3 continues it.
 final class BeliefTests: XCTestCase {
     let priors: [Int: (a: Double, b: Double)] = [5: (0.53, 1.35)]
@@ -277,6 +374,47 @@ final class BeliefTests: XCTestCase {
     }
 }
 
+/// A board is worth drilling when either half is open -- the word is unlearned, or there
+/// is room between how often he takes it and how often someone who sees it does.
+final class WorthDrillingTests: XCTestCase {
+    private func branch(_ word: String, status: String, gain: Double) -> Branch {
+        Branch(word: word, cls: .additive, ext: "", points: 800, reachability: 0.4,
+               reachSource: "observed", myRate: 0.4, topQuartileRate: 0.6, nTopQuartile: 90,
+               presences: 200, finds: 80, opportunity: 120, presencesPerGame: 0.08,
+               belief: 0.7, status: status, expectedGain: gain, earns: true, misswiped: 0)
+    }
+
+    private func hook(_ branches: [Branch]) -> Hook {
+        Hook(stem: "TORE", stemLen: 4, isWord: true, rank: 2, track: "par", score: 8,
+             expectedGain: 33, residual: 830, enumerability: 2.4,
+             enumerabilitySource: "observed", cueable: true, owned: 8, learning: 24,
+             unknown: 87, studyItems: 4, familySize: 60, branchCount: 140,
+             presentShare: 0.13, presentGames: 384, presenceByTierGrid: [:],
+             deadBranches: 56, deadPoints: 0.9, why: "", branches: branches)
+    }
+
+    func testAKnownWordWithARealSightGapIsStillWorthDrilling() {
+        // STORE: he knows it and takes it 42% of the time against the top quartile's 58%.
+        // The old test rejected this board. That was the bug behind "I already know these".
+        let h = hook([branch("STORE", status: "known", gain: 10.7)])
+        XCTAssertTrue(TrainingBoards.worthDrilling(hook: h, targets: ["STORE"]))
+    }
+
+    func testAKnownWordWithNoGapLeftIsNot() {
+        let h = hook([branch("TORES", status: "known", gain: 0)])
+        XCTAssertFalse(TrainingBoards.worthDrilling(hook: h, targets: ["TORES"]))
+    }
+
+    func testAnUnlearnedWordIsWorthDrillingWithOrWithoutAGap() {
+        let h = hook([branch("STOREY", status: "unknown", gain: 0)])
+        XCTAssertTrue(TrainingBoards.worthDrilling(hook: h, targets: ["STOREY"]))
+    }
+
+    func testAWordNotOnTheHookAtAllCountsAsUnseen() {
+        XCTAssertTrue(TrainingBoards.worthDrilling(hook: hook([]), targets: ["ANYTHING"]))
+    }
+}
+
 /// The session's shape, which is the part a user notices when it is wrong.
 @MainActor
 final class SessionPlanTests: XCTestCase {
@@ -288,12 +426,14 @@ final class SessionPlanTests: XCTestCase {
              deadBranches: 10, deadPoints: 1, why: "", branches: [])
     }
 
-    func testFullDayIsWarmUpThenTwoDrillsThenTheGrid() {
+    /// The grid comes before the board, because it is a sorting step: its answers and
+    /// latencies decide whether the drill that follows is about seeing or about knowing.
+    func testFullDaySortsBeforeItDrills() {
         let plan = TrainingSession.buildPlan(newHook: hook("RAI"), due: [], shortDay: false)
         XCTAssertEqual(plan, [.warmup,
+                              .affixGrid(stem: "RAI"),
                               .drill(stem: "RAI", attempt: 1),
                               .drill(stem: "RAI", attempt: 2),
-                              .affixGrid(stem: "RAI"),
                               .summary])
     }
 
@@ -303,8 +443,8 @@ final class SessionPlanTests: XCTestCase {
     func testShortDayIsOneBoardAndOneGrid() {
         let plan = TrainingSession.buildPlan(newHook: hook("RAI"), due: [hook("TORE")],
                                              shortDay: true)
-        XCTAssertEqual(plan, [.drill(stem: "RAI", attempt: 1),
-                              .affixGrid(stem: "RAI"),
+        XCTAssertEqual(plan, [.affixGrid(stem: "RAI"),
+                              .drill(stem: "RAI", attempt: 1),
                               .summary])
     }
 

@@ -155,7 +155,8 @@ enum TrainingBoards {
             let made = HookBoard(purpose: .drill, board: board, solved: solved, hook: hook,
                                  litPath: lit.path, targets: lit.targets, stats: stats,
                                  degraded: false)
-            if targetRange.contains(lit.targets.count), hasResidual(hook: hook, targets: lit.targets) {
+            if targetRange.contains(lit.targets.count),
+               worthDrilling(hook: hook, targets: lit.targets) {
                 return made
             }
             // Keep the closest board seen, so a hook whose branches are hard to co-place
@@ -241,13 +242,20 @@ enum TrainingBoards {
         return best
     }
 
-    /// SPEC 7.5.1: the drill is worth running when something on the board is still to be
-    /// learned. A board of six branches he already owns trains the motor pattern and
-    /// teaches no vocabulary.
-    static func hasResidual(hook: Hook, targets: [String]) -> Bool {
+    /// Is there anything on this board worth training?
+    ///
+    /// This used to ask only SPEC 7.5.1's question -- is a branch here still unlearned --
+    /// and that turns out to be the wrong test, because it treats a word he knows as
+    /// nothing to work on. ERASE was on 243 of his boards and he found it twice: there is
+    /// nothing left to *learn* about ERASE and an enormous amount left to train.
+    ///
+    /// So a target counts if either half is open: the word is not yet known, **or** there
+    /// is room between how often he takes it and how often someone who sees it does
+    /// (`expectedGain`, which is `presences x points x (achievable - myRate)`).
+    static func worthDrilling(hook: Hook, targets: [String]) -> Bool {
         targets.contains { word in
             guard let b = hook.branch(word) else { return true }  // unseen: not owned
-            return b.status != "known"
+            return b.status != "known" || b.expectedGain > 0
         }
     }
 

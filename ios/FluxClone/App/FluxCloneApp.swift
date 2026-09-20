@@ -65,6 +65,12 @@ final class AppModel: ObservableObject {
                 if ProcessInfo.processInfo.environment["FLUXCLONE_AUTOPLAY"] == "1" { self.play() }
                 // The same smoke hatch for the trainer: start a short session as soon as
                 // the queue is up, so a simulator run reaches a drill board without a tap.
+                // A half-finished session is resumed by design, which is right for a real
+                // day and wrong for a test that wants the session from the top, so the
+                // reset hatch exists alongside it.
+                if ProcessInfo.processInfo.environment["FLUXCLONE_RESET_SESSION"] == "1" {
+                    TrainingSession.Resume.clear()
+                }
                 if ProcessInfo.processInfo.environment["FLUXCLONE_TRAIN"] == "1" {
                     self.train(shortDay: true)
                 }

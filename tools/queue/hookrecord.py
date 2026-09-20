@@ -299,7 +299,18 @@ def board_density():
     return out
 
 
-def bundle(records, opp_table=None, priors=None):
+def misswipe_strings(B):
+    """{string: times}. The full invalid-attempt log, not just the repeated strings: the
+    deliverable TSV filters to times >= 2 because that is what is worth *reading*, but a
+    string swiped once is still a confusion worth one card."""
+    out = {}
+    for _, r in B["misswipes"].iterrows():
+        word = str(r["attempt"])
+        out[word] = max(out.get(word, 0), int(r["times"]))
+    return out
+
+
+def bundle(records, opp_table=None, priors=None, B=None):
     """What the app ships with. Everything the session can reach plus a margin."""
     keep = [_trim(r) for r in records
             if r["cueable"] and r["owned"] >= BUNDLE_MIN_OWNED and r["studyItems"] >= 1]
@@ -317,6 +328,13 @@ def bundle(records, opp_table=None, priors=None):
             "branchFields": BRANCH_FIELDS,
             "queueTotal": len(records),
             "boardDensity": board_density(),
+            # Every string the player has actually swiped and had rejected, with how many
+            # times. The affix grid's dead half is drawn from here and nowhere else: a
+            # string he has tried is a confusion he has; a string the dictionary merely
+            # lacks is not. SPEC 7.3.1 calls personal misswipe history the strongest
+            # possible signal, and it needs no model. The app adds its own invalid
+            # attempts to this at drill time, so the set grows as he plays.
+            "misswipes": misswipe_strings(B) if B is not None else {},
             # The belief model's two constants, so an in-app presence is weighted on the
             # same scale as a ranked one and the two can simply be added (SPEC 8.1).
             "opportunityRef": opp_table or {},
@@ -328,10 +346,10 @@ def bundle(records, opp_table=None, priors=None):
             "hooks": out}
 
 
-def write_bundle(records, path=None, opp_table=None, priors=None):
+def write_bundle(records, path=None, opp_table=None, priors=None, B=None):
     path = path or os.path.join(Q.ROOT, "ios", "FluxClone", "Resources", "training_hooks.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    b = bundle(records, opp_table, priors)
+    b = bundle(records, opp_table, priors, B)
     with open(path, "w") as f:
         json.dump(b, f, separators=(",", ":"))
     return path, os.path.getsize(path), len(b["hooks"])
@@ -348,7 +366,7 @@ def main():
     opp, opp_table, priors = opportunity()
     records = build(B, opp)
     p1, s1 = write_full(records)
-    p2, s2, n = write_bundle(records, opp_table=opp_table, priors=priors)
+    p2, s2, n = write_bundle(records, opp_table=opp_table, priors=priors, B=B)
     branches = sum(len(r["branches"]) for r in records)
     print(f"{len(records):,} hooks, {branches:,} branches above the reach floor")
     print(f"{os.path.relpath(p1, Q.ROOT)}  {s1 / 1e6:.1f} MB")

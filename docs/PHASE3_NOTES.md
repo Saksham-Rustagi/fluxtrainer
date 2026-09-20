@@ -187,6 +187,100 @@ three milliseconds and there is no way to light a stem or animate a miss without
 
 ---
 
+## The know-against-see sort
+
+Added after the first real session, because the first thing the player said on using it was
+*"is this really teaching me new words, I lowkey already know these."* He was right, and the
+data says so plainly. Here is what the top of the queue teaches, with how often he already
+takes each word when it is on his board:
+
+| word | hook | boards it was on | he takes | top 25% take | he found |
+| --- | --- | ---: | ---: | ---: | ---: |
+| ERASE | `ERAS-` | 243 | 1% | 28% | 2 / 243 |
+| HEART | `HEAR-` | 110 | 25% | 46% | 28 / 110 |
+| TRACE | `RACE-` | 76 | 12% | 47% | 9 / 76 |
+| SAINT | `AINT-` | 156 | 20% | 34% | 31 / 156 |
+| STORE | `TORE-` | 241 | 42% | 58% | 102 / 241 |
+
+**ERASE was on 243 boards and he found it twice.** Across every word the queue teaches, the
+median one he already takes 11% of the time. This is not a vocabulary list. It is a list of
+words he knows and does not see, which is what the 74%-against-1% chaining finding predicted
+and what the whole project is for.
+
+The app was not saying any of that, which is why the drill read as busywork. Three fixes:
+
+**1. The brief.** One card before a hook's first board, in his own numbers: *"ERASE was on
+243 of your boards. You found it twice. The top 25% find it 28% of the time. This is a
+seeing problem, not a knowing problem."* The hook record has carried a `why` line since
+Phase 2 and nothing displayed it. `SightGap` orders by expected gain rather than by raw rate
+difference, because ERASES has a wider rate gap (0% against 28%) and is worth a third as
+much.
+
+**2. Graded on seconds.** The verdict now shows time-to-find per branch and the change
+against the last time that word was drilled. Found-or-missed cannot move on a word he
+already knows, so it would have read the same in week 1 and week 6. `branch_event.t_found`
+was already being recorded and nothing used it.
+
+**3. The affix grid sorts before the board drills.** This is SPEC 8.1's missing calibration,
+done per hook instead of once globally and with the exercise that already existed. 8.1 is
+explicit that belief is the wrong instrument for this — it is derived from find rate, so
+"never heard of SIREES" and "cannot see ERASE" are the same number — and prescribes a
+one-time 200-item valid/invalid calibration. No phase built it. Now the grid runs first and
+its answers and latencies sort the hook's words:
+
+| call | latency | verdict | what the board drill is then for |
+| --- | --- | --- | --- |
+| correct | ≤ 1.2 s | `known` | vision. The number that moves is seconds-to-find. |
+| correct | > 1.2 s | `shaky` | both problems at once. |
+| wrong | any | `unknown` | genuine vocabulary. Acquisition. |
+
+1.2 s is SPEC 7.3's own target for an affix judgement, not a new constant. The verdict
+overrides belief on the vocabulary question in `TrainingQueue.recompute`, because a fast
+correct call is direct evidence where belief is inference.
+
+**A consequence worth naming:** the drill's board filter used to require a branch that was
+not yet known, which rejected exactly the boards that matter — there is nothing left to
+*learn* about ERASE and an enormous amount left to train. `worthDrilling` now accepts a
+target if either half is open: the word is unlearned, **or** there is room between his rate
+and the achievable one. The same reasoning removed a `status != "known"` filter from the
+queue's gain calculation.
+
+---
+
+## The affix grid, after first contact
+
+Two things were wrong, and the second was a straight defect.
+
+**It was 73 cards for a 3-word problem.** The deck took 40 live branches and sorted them
+*alphabetically*, so `TORE-` opened with PRESTORED and PROTORES and the four words the queue
+actually wants — STORE, STORES, STORED, STORER — were buried past card 20. SPEC 7.5.1 says
+the opposite in as many words: *"The drill shows the residual, not the family. You are not
+re-reading 38 words you know to get to the two you don't."* Its bound on one sitting is 8,
+and the median hook across the queue has **3** branches carrying any gain. The deck is now
+the residual in value order, capped at 8 live and 8 dead — about ten cards.
+
+**The throughput claim does not survive that, and should not.** The brief asks for 60 to 100
+judgements in five minutes and calls that where vocabulary throughput lives. Sized to the
+hook that is ten. The route back to 60-100 is more stems in the block, not more filler per
+stem; that is a Phase 4 scheduling question and is not built.
+
+**The dead half is now only strings he has actually swiped.** SPEC 7.3 mechanism 3 mines
+dead affixes from the dictionary and keeps the most productive that do not complete the
+stem. In practice that produced TOREER, TOREING, GTORE — strings nobody would ever swipe —
+and 7.3 itself says "not a word" is only interesting for *"strings a player would plausibly
+try"*. The strongest evidence that a string is plausible is that he has tried it, which is
+SPEC 7.3.1's first ranking rule. The bundle now ships his whole invalid-attempt log (354
+strings), the app adds its own as he plays, and the dead half is drawn from that and nothing
+else.
+
+The cost is coverage, and it is real: 354 strings cover 15% of the bundled hooks today, so
+most grids start with no stem-specific dead cards. It fills at about 48 invalid attempts a
+game. A floor of 3 dead cards is met from the rest of his own log when a stem has none,
+because a deck whose answer is always "Word" trains pressing Word — and a fast reflexive
+Word reads as `known` and corrupts the sort.
+
+---
+
 ## Decisions the brief left open
 
 **Which branches are the drill's targets.** Every additive branch present on the board *that

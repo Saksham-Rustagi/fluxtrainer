@@ -121,6 +121,10 @@ struct HookBundle {
     let opportunityRef: [String: Double]
     /// Length class -> the Beta(a, b) prior the ranked belief was smoothed with.
     let beliefPriors: [Int: (a: Double, b: Double)]
+    /// Every string the player has swiped and had rejected, with how many times. The
+    /// affix grid's dead half comes from here and from the app's own invalid attempts,
+    /// and from nowhere else.
+    let misswipes: [String: Int]
 
     static let expectedSchema = 1
 
@@ -183,7 +187,8 @@ struct HookBundle {
                           queueTotal: root["queueTotal"] as? Int ?? hooks.count,
                           hooks: hooks, density: density, minedAffixes: affixes,
                           opportunityRef: root["opportunityRef"] as? [String: Double] ?? [:],
-                          beliefPriors: priors)
+                          beliefPriors: priors,
+                          misswipes: root["misswipes"] as? [String: Int] ?? [:])
     }
 
     private static func hook(from d: [String: Any]) throws -> Hook {

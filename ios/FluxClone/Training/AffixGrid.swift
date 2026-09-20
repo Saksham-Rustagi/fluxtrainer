@@ -2,15 +2,24 @@ import SwiftUI
 
 /// SPEC 7.3's affix grid: one stem, its branches one at a time, valid or not.
 ///
-/// This is where vocabulary throughput actually lives -- 60 to 100 judgements in about
-/// five minutes, against the handful of words a board gives you in the same time. It is
-/// the only exercise in Phase 3 with no board, and it is the reason new hooks can enter
-/// through a drill block rather than a reading screen.
+/// The only exercise in Phase 3 with no board, and the way a new hook enters a session
+/// without a reading screen.
 ///
-/// **Dead branches carry equal weight.** 20% of the player's invalid attempts carry an
-/// affix pattern, mostly -ER, -S, -ERS and -ES, and knowing a branch is dead is worth as
-/// much as knowing one is live. So the deck is half live and half dead, and the dead half
-/// is drawn from strings he has actually attempted before it is drawn from the dictionary.
+/// **It is short.** The brief asks for 60 to 100 judgements in five minutes and calls that
+/// where vocabulary throughput lives. That collides with SPEC 7.5.1 -- "the drill shows the
+/// residual, not the family" -- and across the shipped queue the median hook has three
+/// branches carrying any gain. Eighty cards about a three-word problem is eighty cards of
+/// filler, so the deck is sized to the hook: at most eight live and at most eight dead,
+/// usually nearer ten in total. The throughput claim does not survive that, and it should
+/// not: the way back to 60-100 is more stems in the block, not more filler per stem.
+///
+/// **The dead half is the player's own invalid attempts, and nothing else.** SPEC 7.3
+/// mechanism 3 mines dead affixes from the dictionary; in practice that produces TOREER
+/// and GTORE, which nobody would ever swipe, and 7.3 itself says "not a word" is only
+/// interesting for strings a player would plausibly try. The strongest evidence that a
+/// string is plausible is that he has tried it. This starts thin -- 354 logged strings
+/// cover 15% of the bundled hooks -- and fills from play at about 48 invalid attempts a
+/// game.
 struct AffixItem: Identifiable {
     let word: String
     let cls: HookClass
@@ -27,40 +36,128 @@ struct AffixItem: Identifiable {
 }
 
 enum AffixGridBuilder {
-    /// About five minutes at the 1.2 s target.
-    static let deckSize = 80
+    /// SPEC 7.5.1: "The drill shows the residual, not the family. You are not re-reading 38
+    /// words you know to get to the two you don't." Its own bound on one sitting's work is
+    /// 8, and the median hook across the whole queue has 3 branches carrying any gain, so
+    /// a deck of 80 was asking an 80-item question about a 3-item problem.
+    static let liveCap = 8
+    static let deadCap = 8
+    /// Minimum "not a word" cards in any deck, so the answer is never uniform. Met from
+    /// the stem's own misswipes first and from the rest of the player's log otherwise.
+    static let deadFloor = 3
+    /// Below this a branch is not on the board often enough to be worth a card, even
+    /// unknown (hooks.py's BRANCH_REACH_FLOOR, an order of magnitude up).
+    static let topUpReachFloor = 0.02
     static let targetLatency = 1.2
 
-    static func deck(for hook: Hook, size: Int = deckSize) -> [AffixItem] {
-        // Live: every form that is a word. Cellmates are left out -- an anagram is not an
-        // affix judgement, it is SPEC 7.6's separate drill, and mixing them would teach
-        // the grid's pattern wrong.
-        var live = hook.branches
-            .filter { $0.cls == .additive || $0.cls == .mutating_ }
-            .map { AffixItem(word: $0.word, cls: $0.cls, ext: $0.ext, isLive: true,
-                             fromMisswipe: $0.misswiped > 0) }
-        var dead = hook.branches
-            .filter { $0.cls == .dead }
-            .map { AffixItem(word: $0.word, cls: $0.cls, ext: $0.ext, isLive: false,
-                             fromMisswipe: $0.misswiped > 0) }
-
-        // Strings he has actually tried go first in both halves: a misswipe is the
-        // strongest possible signal and it needs no model (SPEC 7.3.1).
-        dead.sort { ($0.fromMisswipe ? 0 : 1, $0.word) < ($1.fromMisswipe ? 0 : 1, $1.word) }
-        live.sort { ($0.fromMisswipe ? 0 : 1, $0.word) < ($1.fromMisswipe ? 0 : 1, $1.word) }
-
-        let half = size / 2
-        let takeLive = min(half, live.count)
-        let takeDead = min(size - takeLive, dead.count)
-        var deck = Array(live.prefix(takeLive)) + Array(dead.prefix(takeDead))
-        if deck.count < size {  // one side ran out: top up from the other
-            let extraLive = live.dropFirst(takeLive).prefix(size - deck.count)
-            deck += extraLive
-            let extraDead = dead.dropFirst(takeDead).prefix(size - deck.count)
-            deck += extraDead
+    /// The live half: what the queue is actually teaching, in value order.
+    ///
+    /// Two tiers. First the branches carrying expected gain and not already owned -- the
+    /// study items, which is what `residual` means. Then, to top up a thin hook, unknown
+    /// or half-known branches that are reachable enough to meet on a board. Ordering by
+    /// anything else buries STORE and STORED under PRESTORED and PROTORES.
+    static func live(for hook: Hook) -> [AffixItem] {
+        func item(_ b: Branch) -> AffixItem {
+            AffixItem(word: b.word, cls: b.cls, ext: b.ext, isLive: true,
+                      fromMisswipe: b.misswiped > 0)
         }
+        let candidates = hook.branches.filter { $0.cls == .additive || $0.cls == .mutating_ }
+        let study = candidates
+            .filter { $0.earns && $0.status != "known" && $0.expectedGain > 0 }
+            .sorted { $0.expectedGain > $1.expectedGain }
+        var out = study.prefix(liveCap).map(item)
+        if out.count < liveCap {
+            let taken = Set(out.map(\.word))
+            let topUp = candidates
+                .filter { !taken.contains($0.word) && $0.status != "known"
+                          && $0.reachability >= topUpReachFloor }
+                .sorted { $0.reachability > $1.reachability }
+            out += topUp.prefix(liveCap - out.count).map(item)
+        }
+        return out
+    }
+
+    /// The dead half: strings the player has actually swiped and had rejected, and nothing
+    /// else.
+    ///
+    /// This departs from SPEC 7.3 mechanism 3, which mines dead affixes from the
+    /// dictionary and keeps the ~30 most productive that do not complete the stem. That
+    /// set is mostly unreachable in practice -- for TORE- it produces TOREER, TOREING,
+    /// GTORE -- and 7.3 is itself explicit that "not a word" is only interesting for
+    /// strings a player would plausibly try. The strongest evidence that a string is
+    /// plausible is that he has tried it, which is SPEC 7.3.1's first ranking rule.
+    ///
+    /// The cost is coverage: 354 strings in the log today cover 15% of the bundled hooks,
+    /// so most grids start with no dead half at all. It fills from play -- the clone
+    /// measures 48 invalid attempts a game -- and `inApp` is that feed.
+    static func dead(for hook: Hook, shipped: [String: Int], inApp: [String: Int])
+        -> [AffixItem] {
+        var counts: [String: Int] = [:]
+        for (word, times) in shipped { counts[word] = times }
+        for (word, times) in inApp { counts[word, default: 0] += times }
+        let byFrequency = counts.sorted {
+            $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key
+        }
+        func item(_ pair: (key: String, value: Int)) -> AffixItem {
+            AffixItem(word: pair.key, cls: .dead,
+                      ext: pair.key.contains(hook.stem) ? extDisplay(pair.key, stem: hook.stem)
+                                                        : "your own misswipe",
+                      isLive: false, fromMisswipe: true)
+        }
+
+        let onStem = byFrequency
+            .filter { $0.key.count > hook.stem.count && $0.key.contains(hook.stem) }
+        var out = onStem.prefix(deadCap).map(item)
+
+        // A deck whose answer is "Word" every time teaches one thing: press Word. And
+        // pressing Word fast on a word you do not know reads as `known` and corrupts the
+        // sort, which is the one job this screen has. So a stem with nothing logged
+        // against it borrows from the rest of his own log -- still only strings he has
+        // actually swiped and had rejected, just met under a different stem.
+        if out.count < deadFloor {
+            let taken = Set(out.map(\.word))
+            out += byFrequency
+                .filter { !taken.contains($0.key) }
+                .prefix(deadFloor - out.count)
+                .map(item)
+        }
+        return out
+    }
+
+    /// "-ER", "PRE-", "RE--S": how the string reads against the stem.
+    static func extDisplay(_ word: String, stem: String) -> String {
+        guard let range = word.range(of: stem) else { return word }
+        let front = String(word[word.startIndex..<range.lowerBound])
+        let back = String(word[range.upperBound...])
+        switch (front.isEmpty, back.isEmpty) {
+        case (true, true): return stem
+        case (false, true): return front + "-"
+        case (true, false): return "-" + back
+        case (false, false): return front + "--" + back
+        }
+    }
+
+    static func deck(for hook: Hook, shipped: [String: Int] = [:],
+                     inApp: [String: Int] = [:]) -> [AffixItem] {
+        var deck = live(for: hook) + dead(for: hook, shipped: shipped, inApp: inApp)
         deck.shuffle()
         return deck
+    }
+
+    /// Invalid attempts made inside the app that contain this stem. Every board played
+    /// here logs its rejected swipes exactly as the clone does, so the dead half grows
+    /// out of the player's own play rather than out of the dictionary.
+    static func inAppMisswipes(stem: String) -> [String: Int] {
+        var out: [String: Int] = [:]
+        Database.shared.query("""
+            SELECT letters, COUNT(*) FROM attempt
+            WHERE result = 'invalid' AND reason = 'not_word'
+              AND length(letters) > ? AND instr(letters, ?) > 0
+            GROUP BY letters
+            """, [stem.count, stem]) { row in
+            out[row.text(0)] = row.int(1)
+        }
+        return out
     }
 }
 
@@ -97,7 +194,10 @@ struct AffixGridView: View {
         .background(Color(uiColor: FluxTheme.bg))
         .onAppear {
             if deck.isEmpty {
-                deck = AffixGridBuilder.deck(for: hook)
+                deck = AffixGridBuilder.deck(
+                    for: hook,
+                    shipped: HookBundle.shared?.misswipes ?? [:],
+                    inApp: AffixGridBuilder.inAppMisswipes(stem: hook.stem))
                 shownAt = Date()
             }
         }
@@ -115,6 +215,15 @@ struct AffixGridView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.top, 8)
+        .overlay(alignment: .bottom) {
+            // Says what the grid is for, because it is no longer only a teaching screen:
+            // the answer and the latency decide whether the board drill that follows is
+            // about seeing the word or about knowing it.
+            Text("quick check \u{2014} answer fast")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .offset(y: 16)
+        }
     }
 
     /// SPEC 7.3: display leads with the shared part, since the pattern is the thing being

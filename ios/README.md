@@ -4,9 +4,11 @@ An iOS app that plays like Flux ranked and logs every swipe (Phase 1), and train
 vision off the Phase 2 queue (Phase 3).
 
 - **Play** is the clone: an 80-second ranked board, nothing constrained, everything logged.
-- **Train** is the teaching loop: a warm-up board, branch-completion drills on a hook the
-  app picks, an affix grid, and family sweeps of hooks that are due. Ten to fifteen minutes,
-  one tap, no configuration. `docs/PHASE3_NOTES.md` covers what it does and why.
+- **Train** is the teaching loop: a warm-up board; then, for a hook the app picks, a short
+  affix grid that sorts its words into ones you know and ones you do not, a card saying what
+  the drill is for in your own numbers, and two branch-completion boards graded on
+  seconds-to-find; then family sweeps of hooks that are due. Ten to fifteen minutes, one tap,
+  no configuration. `docs/PHASE3_NOTES.md` covers what it does and why.
 
 - The input layer is ported from flux-ios at `40e6ed7`. `docs/CLONE_RECON.md` gives the source
   file and line for each rule.

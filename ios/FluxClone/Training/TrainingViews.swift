@@ -15,6 +15,8 @@ struct SessionView: View {
             switch session.screen {
             case .preparing(let what):
                 PreparingView(what: what, onExit: exit)
+            case .brief(let hook, let gaps, let state):
+                VisionBriefView(hook: hook, gaps: gaps) { session.startBriefedBoard(state) }
             case .board(let state):
                 GameHost(board: state.board.board, mode: state.mode) { result in
                     session.boardFinished(state, result: result)
@@ -69,7 +71,7 @@ private struct VerdictView: View {
     let onward: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Spacer()
             if let hook = verdict.hook {
                 Text(verdict.stemWasLit ? "\(hook.stem)- lit" : "\(hook.stem)-")
@@ -87,11 +89,9 @@ private struct VerdictView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if !verdict.found.isEmpty {
-                wordRow(verdict.found, color: accent)
-            }
-            if !verdict.missed.isEmpty {
-                wordRow(verdict.missed, color: Color(uiColor: FluxTheme.colorfulError))
+            VStack(spacing: 6) {
+                ForEach(verdict.found) { row($0, found: true) }
+                ForEach(verdict.missed) { row($0, found: false) }
             }
             Spacer()
 
@@ -118,13 +118,78 @@ private struct VerdictView: View {
         .background(bg)
     }
 
-    private func wordRow(_ words: [String], color: Color) -> some View {
-        Text(words.sorted().joined(separator: " · "))
-            .font(.body.monospaced())
-            .foregroundStyle(color)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(panel))
+    /// Seconds, not a tick. On a word the grid says you know, seconds is the only thing
+    /// that can move, and "3 of 4" would read the same in week 1 and week 6.
+    private func row(_ outcome: TrainingSession.Verdict.Outcome, found: Bool) -> some View {
+        HStack(spacing: 10) {
+            Text(outcome.word)
+                .font(.body.monospaced())
+                .foregroundStyle(found ? accent : Color(uiColor: FluxTheme.colorfulError))
+            if outcome.knowledge == .known {
+                Text("you know this")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else if outcome.knowledge == .unknown {
+                Text("new")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            if let seconds = outcome.seconds {
+                Text(String(format: "%.1fs", seconds))
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(.white)
+                if let delta = outcome.improvement, abs(delta) >= 0.2 {
+                    Text(String(format: "%@%.1f", delta > 0 ? "−" : "+", abs(delta)))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(delta > 0 ? accent : .orange)
+                }
+            } else {
+                Text("missed").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(panel))
+    }
+}
+
+/// The card that was missing. One hook, its worst two words, in the player's own numbers.
+private struct VisionBriefView: View {
+    let hook: Hook
+    let gaps: [SightGap]
+    let start: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Spacer()
+            Text("\(hook.stem)-")
+                .font(Font(FluxFont.bold(52)))
+                .foregroundStyle(accent)
+            ForEach(gaps, id: \.word) { gap in
+                Text(gap.sentence)
+                    .font(.body)
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(panel))
+            }
+            Text("This is a seeing problem, not a knowing problem. The stem will be lit; "
+                 + "find what hangs off it.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button(action: start) {
+                Text("Go").font(.title2.weight(.heavy))
+                    .frame(maxWidth: .infinity).padding()
+            }
+            .buttonStyle(.borderedProminent).tint(accent).foregroundStyle(bg)
+        }
+        .padding(.horizontal, 26)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(bg)
     }
 }
 
@@ -149,6 +214,17 @@ private struct SummaryView: View {
             if summary.judgements > 0 {
                 line("Affix grid", "\(summary.judgementsCorrect) of \(summary.judgements)"
                      + (summary.medianJudgementLatency.map { String(format: " · %.2f s", $0) } ?? ""))
+            }
+            if summary.judgedKnown + summary.judgedShaky + summary.judgedUnknown > 0 {
+                // The distinction the app could not make before: of the words the queue
+                // is teaching, how many are vocabulary and how many are vision.
+                line("Words you knew", "\(summary.judgedKnown)")
+                if summary.judgedShaky > 0 { line("Had to work for", "\(summary.judgedShaky)") }
+                if summary.judgedUnknown > 0 { line("Genuinely new", "\(summary.judgedUnknown)") }
+            }
+            if !summary.sightTimes.isEmpty {
+                let sorted = summary.sightTimes.sorted()
+                line("Median time to find", String(format: "%.1fs", sorted[sorted.count / 2]))
             }
             line("Boards", "\(summary.boards)")
             if summary.degradedBoards > 0 {

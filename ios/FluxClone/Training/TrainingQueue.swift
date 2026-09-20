@@ -103,6 +103,10 @@ final class TrainingQueue: ObservableObject {
     /// end: two grouped selects and a pass over the bundled hooks.
     func recompute() {
         words = Self.loadWordState()
+        // The affix grid's sort overrides belief on the vocabulary question. Belief is
+        // derived from find rate and so cannot tell "never heard of it" from "never see
+        // it"; a fast correct call can, and it is direct evidence rather than inference.
+        let judged = WordKnowledge.allVerdicts()
         var beliefs: [String: Double] = [:]
         var beliefRows: [[String: Any?]] = []
         var promotedRate = 0, stillUntrusted = 0
@@ -124,7 +128,13 @@ final class TrainingQueue: ObservableObject {
                     inAppFinds: state.weightedFinds, inAppOpportunity: state.weightedOpportunity,
                     priors: bundle.beliefPriors)
                 beliefs[branch.word] = belief
-                let status = Belief.status(belief)
+                var status = Belief.status(belief)
+                switch judged[branch.word] {
+                case .known: status = "known"
+                case .unknown: status = "unknown"
+                case .shaky: status = status == "known" ? "learning" : status
+                case .none, .some(.unjudged): break
+                }
                 switch status {
                 case "known": owned += 1
                 case "learning": learning += 1
@@ -159,7 +169,11 @@ final class TrainingQueue: ObservableObject {
                 }
                 let rankable = topQTrusted && presences >= Self.minPresences
                     && branch.word.count >= Self.minLength
-                guard rankable, branch.earns, status != "known" else { continue }
+                // Note the absence of a `status != "known"` test here. That was right
+                // when the queue was read as a vocabulary list and is wrong now: a word
+                // he knows and takes 42% of the time still has 16 points a game in it,
+                // and that gap is exactly what a vision drill is for.
+                guard rankable, branch.earns else { continue }
                 let achievable = max(branch.topQuartileRate ?? 0, myRate)
                 let value = branch.presencesPerGame * Double(branch.points)
                     * max(0, achievable - myRate)

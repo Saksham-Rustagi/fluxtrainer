@@ -25,7 +25,7 @@ def main():
     records = hookrecord.build(B, opp)
     _, full_size = hookrecord.write_full(records)
     _, bundle_size, bundled = hookrecord.write_bundle(records, opp_table=opp_table,
-                                                      priors=priors)
+                                                      priors=priors, B=B)
     print(f"queue_hooks.tsv  {len(hd):>7,} hooks")
     print(f"queue_words.tsv  {len(wd):>7,} words")
     print(f"misswipes.tsv    {int((B['misswipes'].times >= 2).sum()):>7,} repeated strings")
