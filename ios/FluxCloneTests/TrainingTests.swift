@@ -305,7 +305,8 @@ final class WordKnowledgeTests: XCTestCase {
         // A word with too little evidence gets no sentence rather than a made-up one.
         let thin = Branch(word: "XYZZY", cls: .additive, ext: "", points: 800,
                           reachability: 0.5, reachSource: "fitted", myRate: 0,
-                          topQuartileRate: 0.4, nTopQuartile: 40, presences: 3, finds: 0,
+                          topQuartileRate: 0.4, nTopQuartile: 40, fieldRate: 0.2,
+                          presences: 3, finds: 0,
                           opportunity: 1, presencesPerGame: 0.01, belief: 0.1,
                           status: "unknown", expectedGain: 0, earns: true, misswiped: 0)
         XCTAssertNil(SightGap(branch: thin))
@@ -380,7 +381,8 @@ final class WorthDrillingTests: XCTestCase {
     private func branch(_ word: String, status: String, gain: Double) -> Branch {
         Branch(word: word, cls: .additive, ext: "", points: 800, reachability: 0.4,
                reachSource: "observed", myRate: 0.4, topQuartileRate: 0.6, nTopQuartile: 90,
-               presences: 200, finds: 80, opportunity: 120, presencesPerGame: 0.08,
+               fieldRate: 0.5, presences: 200, finds: 80, opportunity: 120,
+               presencesPerGame: 0.08,
                belief: 0.7, status: status, expectedGain: gain, earns: true, misswiped: 0)
     }
 

@@ -89,6 +89,14 @@ enum TrainingLog {
         })
 
         writePresences(board: board, result: result, evidence: evidence, targets: Set(board.targets))
+        // Every board played leaves a row per family it carried, this one included, so the
+        // per-stem trend covers training boards and ranked games on the same footing. The
+        // `purpose` column is what lets the trend exclude the boards that pointed at it.
+        if let index = FamilyIndex.shared {
+            writeMeetings(gameId: result.gameId, side: board.side,
+                          purpose: board.purpose.rawValue, drilled: board.hook?.stem,
+                          meetings: index.meetings(on: board.solved, found: foundSet))
+        }
         return (found, missed)
     }
 
@@ -102,35 +110,48 @@ enum TrainingLog {
     /// unprompted weight whatever exercise it came from.
     static func writePresences(board: HookBoard, result: GameResult,
                                evidence: Belief.Evidence, targets: Set<String>) {
+        writePresences(gameId: result.gameId, side: board.side, tier: board.board.tier.name,
+                       purpose: board.purpose.rawValue, solved: board.solved, result: result,
+                       evidence: evidence, targets: targets)
+    }
+
+    /// The same thing for a board that is not a training board. Phase 3 wrote presences
+    /// only for boards the session served, which meant a ranked game -- the thing the
+    /// player actually does -- fed the belief model nothing at all. Every completed board
+    /// goes through here now, which is what makes "the queue moves on its own" true rather
+    /// than aspirational.
+    static func writePresences(gameId: String, side: Int, tier: String, purpose: String,
+                               solved: SolvedBoard, result: GameResult,
+                               evidence: Belief.Evidence, targets: Set<String>) {
         let foundAt = Dictionary(result.found.map { ($0.word, $0.t - result.tBoardShown) },
                                  uniquingKeysWith: { a, _ in a })
         let reference = HookBundle.shared?.opportunityRef ?? [:]
 
         var presentByClass: [Int: Int] = [:]
         var foundByClass: [Int: Int] = [:]
-        for w in board.solved.words {
+        for w in solved.words {
             let lc = min(w.word.count, 7)
             presentByClass[lc, default: 0] += 1
             if foundAt[w.word] != nil { foundByClass[lc, default: 0] += 1 }
         }
 
-        let free = freeWords(board: board, result: result)
+        let free = freeWords(solved: solved, result: result)
         var rows: [[String: Any?]] = []
-        rows.reserveCapacity(board.solved.count)
-        for w in board.solved.words {
+        rows.reserveCapacity(solved.count)
+        for w in solved.words {
             let lc = min(w.word.count, 7)
             let opportunity = Belief.opportunity(
                 foundOfClass: foundByClass[lc] ?? 0, presentOfClass: presentByClass[lc] ?? 0,
-                side: board.side, length: w.word.count, reference: reference)
+                side: side, length: w.word.count, reference: reference)
             let isFound = foundAt[w.word] != nil
             let kind: Belief.Evidence = targets.contains(w.word) ? evidence : .unpromptedBoard
             let contribution = Belief.contribution(found: isFound, opportunity: opportunity,
                                                    evidence: kind)
             rows.append([
-                "game_id": result.gameId, "word": w.word, "len": w.word.count,
+                "game_id": gameId, "word": w.word, "len": w.word.count,
                 "points": w.points, "found": isFound ? 1 : 0, "t_found": foundAt[w.word],
-                "grid": board.side, "tier": board.board.tier.name,
-                "board_words": board.solved.count, "purpose": board.purpose.rawValue,
+                "grid": side, "tier": tier,
+                "board_words": solved.count, "purpose": purpose,
                 "path_count": w.pathCount,
                 "free": free[w.word] != nil ? 1 : 0, "host": free[w.word],
                 "source": "inapp", "opportunity": opportunity, "evidence": kind.rawValue,
@@ -140,11 +161,34 @@ enum TrainingLog {
         Database.shared.writeMany("presence", rows)
     }
 
+    /// One row per family with a member on the board. Grouping here, at write time, is
+    /// what turns "have I got the ones worth having on TORE-" into a single indexed
+    /// select instead of a scan over every presence row ever written.
+    static func writeMeetings(gameId: String, side: Int, purpose: String, drilled: String?,
+                              meetings: [String: FamilyMeeting]) {
+        guard !meetings.isEmpty else { return }
+        let wall = now()
+        let rows = meetings.values.map { m -> [String: Any?] in
+            [
+                "game_id": gameId, "stem": m.stem,
+                "present": m.present.count, "found": m.found.count,
+                "points_present": m.pointsPresent, "points_found": m.pointsFound,
+                "purpose": purpose, "grid": side,
+                "drilled": m.stem == drilled ? 1 : 0, "wall": wall,
+            ]
+        }
+        Database.shared.writeMany("hook_meeting", rows)
+    }
+
     /// Which words were sitting on a path already swiped, and off which find. This is the
     /// 74%-against-1% distinction made concrete: a word whose cells were already under the
     /// finger is a different proposition from one that had to be found cold, and pricing
     /// the two the same is what the whole project is trying to stop doing.
     static func freeWords(board: HookBoard, result: GameResult) -> [String: String] {
+        freeWords(solved: board.solved, result: result)
+    }
+
+    static func freeWords(solved: SolvedBoard, result: GameResult) -> [String: String] {
         guard !result.found.isEmpty else { return [:] }
         var swiped: [String: String] = [:]   // encoded path -> the word that swiped it
         for f in result.found where f.cells.count >= 3 {
@@ -153,7 +197,7 @@ enum TrainingLog {
         guard !swiped.isEmpty else { return [:] }
 
         var out: [String: String] = [:]
-        for w in board.solved.words where w.word.count >= 4 {
+        for w in solved.words where w.word.count >= 4 {
             outer: for path in w.paths {
                 guard path.count > 3 else { continue }
                 for length in 3...(path.count - 1) {

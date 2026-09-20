@@ -33,6 +33,15 @@ struct Branch {
     let myRate: Double?
     let topQuartileRate: Double?
     let nTopQuartile: Int
+    /// How often the whole field takes this word. Schema 2.
+    ///
+    /// rank.py splits the queue on it: below 10% the word is **alpha** -- vocabulary
+    /// almost nobody has, where finding it at all is the win -- and at or above it the
+    /// word is **par**, something you are expected to take and are not taking. That is
+    /// the know-against-see distinction again, measured on other players rather than on
+    /// him, and it is the difference between "learn this word" and "start seeing this
+    /// word". Nil for a branch the ranked import could not price.
+    let fieldRate: Double?
     /// Ranked presences and finds on current-regime boards. The app adds its own to these
     /// rather than replacing them, which is why the record carries the counts and not
     /// just the ratio.
@@ -51,6 +60,12 @@ struct Branch {
     /// grid draws its dead branches from here first: a string he has actually tried is
     /// better teaching material than one the dictionary merely fails to contain.
     let misswiped: Int
+
+    /// rank.py's line: the field takes it less than one time in ten.
+    static let alphaBelow = 0.10
+    /// Vocabulary almost nobody has. Finding it at all is the win.
+    var isAlpha: Bool { (fieldRate ?? 1) < Branch.alphaBelow }
+    var track: String { isAlpha ? "alpha" : "par" }
 }
 
 struct Hook {
@@ -126,7 +141,7 @@ struct HookBundle {
     /// and from nowhere else.
     let misswipes: [String: Int]
 
-    static let expectedSchema = 1
+    static let expectedSchema = 2
 
     private(set) static var shared: HookBundle?
     private(set) static var loadError: String?
@@ -230,7 +245,8 @@ struct HookBundle {
         // Every field the struct needs must be present. A field the file has and this
         // build does not know about is ignored, which is what lets the Python side add
         // one without a coordinated release; a field it drops is a load failure.
-        for required in ["word", "cls", "points", "reachability"] where index[required] == nil {
+        for required in ["word", "cls", "points", "reachability", "fieldRate"]
+        where index[required] == nil {
             throw LoadError(description: "branch field '\(required)' missing from the record")
         }
         return rows.compactMap { row -> Branch? in
@@ -247,6 +263,7 @@ struct HookBundle {
                 reachSource: at("reachSource") as? String ?? "",
                 myRate: at("myRate").map(num), topQuartileRate: at("topQuartileRate").map(num),
                 nTopQuartile: at("nTopQuartile") as? Int ?? 0,
+                fieldRate: at("fieldRate").map(num),
                 presences: at("presences") as? Int ?? 0, finds: at("finds") as? Int ?? 0,
                 opportunity: num(at("opportunity")),
                 presencesPerGame: num(at("presencesPerGame")),

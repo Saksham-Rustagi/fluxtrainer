@@ -13,10 +13,39 @@ struct GameResult {
     /// needs all three: the time to find, the path for the review, and the cells for
     /// deciding whether a later find was free off this one.
     var found: [FoundWord] = []
-    /// Rejected strings, for the misswipe half of the affix grid.
-    var invalidWords: [String] = []
+    /// Rejected strings, for the misswipe half of the affix grid and for review's
+    /// classification of them. The cells matter: "is a real word one edit away on this
+    /// board" and "was a word still reachable from the last cell" are both path questions.
+    var invalidAttempts: [InvalidAttempt] = []
+    /// Words re-swiped after already being found, with the seconds the re-swipe cost
+    /// all-in. Phase 1 counted them and threw the strings away; 13 a game at 6.3 seconds
+    /// is the single cheapest thing on any board to stop doing.
+    var duplicateAttempts: [DuplicateAttempt] = []
+    /// Every cell touched by any swipe, valid or not. The coverage signal SPEC 7.4 needs
+    /// to tell "you were there and did not finish" from "you never went there", which are
+    /// different problems with different fixes.
+    var touchedCells: Set<Int> = []
     /// The board clock's zero, so a find time can be turned into game time.
     var tBoardShown: Double = 0
+    /// How long the board was actually on screen. A drill can end early by clearing its
+    /// targets, so this is not the mode's duration, and it is the denominator review
+    /// converts wasted seconds into points with.
+    var elapsed: Double = 0
+
+    var invalidWords: [String] { invalidAttempts.map(\.word) }
+}
+
+struct InvalidAttempt {
+    let word: String
+    let cells: [Int]
+    /// Wall-to-wall cost: from the previous submit to this one, which is the number the
+    /// misswipe track reports and the one that answers "what did this cost me".
+    let seconds: Double
+}
+
+struct DuplicateAttempt {
+    let word: String
+    let seconds: Double
 }
 
 struct FoundWord {
@@ -48,14 +77,11 @@ struct GameMode {
     /// The branches being asked for. A counter shows how many remain, never which.
     var targets: Set<String> = []
     var showsCounter = false
-    /// On timeout, walk the missed targets along their paths, one at a time. Seeing the
-    /// path is the lesson; a list of missed words teaches nothing.
-    var replayMisses = false
-    /// Cell paths for the replay, by word.
-    var targetPaths: [String: [Int]] = [:]
-
-    /// How many missed branches get drawn. Longest first.
-    static let replayCap = 5
+    /// A way to stop without it counting as walking out. A drill can put words on the
+    /// board that have simply not been learned yet, and the only honest thing to do then
+    /// is say so -- sitting through 45 seconds of clock teaches nothing, and abandoning
+    /// logs the board as interrupted, which is a different claim.
+    var canGiveUp = false
 
     static let ranked = GameMode()
 }
@@ -64,7 +90,14 @@ struct GameMode {
 /// through SwiftUI. Layout, colours, feedback and rules follow flux-ios BoardView.swift;
 /// docs/CLONE_RECON.md has the source for each.
 final class GameViewController: UIViewController {
-    static let duration: Double = 80
+    /// 80 seconds, except under `FLUXCLONE_BOARD_SECONDS`. That hatch exists so a UI test
+    /// can play a board through to review without spending eighty seconds of CI on it;
+    /// nothing in the app sets it, and a game played with it is otherwise identical.
+    static let duration: Double = {
+        if let raw = ProcessInfo.processInfo.environment["FLUXCLONE_BOARD_SECONDS"],
+           let seconds = Double(raw), seconds > 0 { return seconds }
+        return 80
+    }()
 
     private let board: GeneratedBoard
     private let config: RecognizerConfig
@@ -90,9 +123,9 @@ final class GameViewController: UIViewController {
     /// The stem, lit under the swipe path for the whole drill. A layer rather than tile
     /// styling, so selecting and deselecting a tile cannot rub it out.
     private let litLayer = CAShapeLayer()
-    /// Where the miss replay draws.
-    private let replayLayer = CAShapeLayer()
     private let counterLabel = UILabel()
+    /// "I don't know these", on a drill board only.
+    private let giveUpButton = UIButton(type: .system)
     private let bubble = WordBubble()
     private var laidOut = false
 
@@ -116,10 +149,10 @@ final class GameViewController: UIViewController {
     private var displayedScore = 0
     private var scoreAnimation: (from: Int, to: Int, start: Double)?
     private var foundWords: [FoundWord] = []
-    private var invalidWords: [String] = []
+    private var invalidAttempts: [InvalidAttempt] = []
+    private var duplicateAttempts: [DuplicateAttempt] = []
+    private var touchedCells: Set<Int> = []
     private var targetsRemaining: Set<String> = []
-    private var replaying = false
-    private var replayCompletion: (() -> Void)?
 
     // The swipe in progress
     private struct Attempt {
@@ -182,11 +215,21 @@ final class GameViewController: UIViewController {
         counterLabel.textAlignment = .center
         counterLabel.isHidden = !mode.showsCounter
         updateCounter()
+
+        // The way out that is not walking out. Deliberately quiet -- it should not be the
+        // first thing reached for -- but present, because a drill can put a word on the
+        // board that has simply not been learned yet and there is nothing to be gained
+        // from staring at the clock.
+        giveUpButton.setTitle("I don't know these", for: .normal)
+        giveUpButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        giveUpButton.tintColor = FluxTheme.bgContrast.withAlphaComponent(0.55)
+        giveUpButton.addTarget(self, action: #selector(giveUpTapped), for: .touchUpInside)
+        giveUpButton.isHidden = !mode.canGiveUp
         scoreLabel.isHidden = !mode.showsScore
         wordsLabel.isHidden = !mode.showsScore
 
-        [backButton, scoreLabel, wordsLabel, timeLabel, counterLabel, boardArea]
-            .forEach(view.addSubview)
+        [backButton, scoreLabel, wordsLabel, timeLabel, counterLabel, boardArea,
+         giveUpButton].forEach(view.addSubview)
         haptics.prepare()
         sounds.start()
 
@@ -207,6 +250,13 @@ final class GameViewController: UIViewController {
 
         // Header row (back button), then hudTopGap, then GameStats.
         backButton.frame = CGRect(x: safe.minX + 16, y: safe.minY + 8, width: 32, height: 32)
+        // Top right, in the header row, so the board geometry below is byte-identical to
+        // the game's. A drill board that laid out differently would train a different
+        // motor pattern, which is the one thing the clone must not do.
+        giveUpButton.sizeToFit()
+        giveUpButton.frame = CGRect(x: safe.maxX - 16 - giveUpButton.bounds.width,
+                                    y: safe.minY + 8,
+                                    width: giveUpButton.bounds.width, height: 32)
         var y = safe.minY + 8 + 32 + 4
         y += UIScreen.main.bounds.height >= 700 ? 16 : 2
         scoreLabel.sizeToFit()
@@ -255,8 +305,8 @@ final class GameViewController: UIViewController {
         touchView.controller = self
         boardArea.addSubview(touchView)
 
-        // The lit stem goes under the swipe path, the replay over it.
-        for layer in [litLayer, pathLayer, replayLayer] {
+        // The lit stem goes under the swipe path.
+        for layer in [litLayer, pathLayer] {
             layer.frame = boardArea.bounds
             layer.fillColor = nil
             layer.lineWidth = BoardSettings.flux.pathWidth
@@ -268,8 +318,6 @@ final class GameViewController: UIViewController {
         pathLayer.strokeColor = FluxTheme.path.cgColor
         litLayer.strokeColor = FluxTheme.main.withAlphaComponent(0.45).cgColor
         litLayer.lineWidth = BoardSettings.flux.pathWidth * 1.4
-        replayLayer.strokeColor = FluxTheme.main.cgColor
-        replayLayer.lineWidth = BoardSettings.flux.pathWidth * 1.2
         if !mode.litPath.isEmpty {
             litLayer.path = bezier(through: mode.litPath).cgPath
             for cell in mode.litPath { tileViews[cell].lit = true }
@@ -474,6 +522,10 @@ final class GameViewController: UIViewController {
         let word = currentLetters
         let state = classify(word)
         clearSelection()
+        // Filled in by the switch below and drained once `gap` is known, which is the
+        // only place the all-in cost of the attempt exists.
+        var invalidSubmit: (String, [Int])?
+        var duplicateSubmit: String?
 
         let result: String
         var reason: String?
@@ -498,6 +550,7 @@ final class GameViewController: UIViewController {
             result = "duplicate"
             wordId = engine.wordId(word)
             duplicateCount += 1
+            duplicateSubmit = word
             haptics.fire(Haptics.submitInvalid)
             sounds.invalidWord()
         case .invalid:
@@ -505,7 +558,7 @@ final class GameViewController: UIViewController {
             reason = cells.isEmpty ? "empty" : (word.count < 3 ? "too_short" : "not_word")
             if reason == "not_word" {
                 invalidCount += 1
-                invalidWords.append(word)
+                invalidSubmit = (word, cells)
             }
             haptics.fire(Haptics.submitInvalid)
             sounds.invalidWord()
@@ -517,6 +570,14 @@ final class GameViewController: UIViewController {
 
         let t0 = tBoardShown ?? t
         let gap = t - (lastSubmit ?? t0)
+        touchedCells.formUnion(cells)
+        if let (invalidWord, invalidCells) = invalidSubmit {
+            invalidAttempts.append(
+                InvalidAttempt(word: invalidWord, cells: invalidCells, seconds: gap))
+        }
+        if let word = duplicateSubmit {
+            duplicateAttempts.append(DuplicateAttempt(word: word, seconds: gap))
+        }
         if !cells.isEmpty {
             lastSubmit = t
             if tFirstSubmit == nil { tFirstSubmit = t }
@@ -608,82 +669,23 @@ final class GameViewController: UIViewController {
         let result = GameResult(gameId: gameId, board: board, score: score, words: found.count,
                                 invalid: invalidCount, duplicates: duplicateCount,
                                 abandoned: reason == "abandoned",
-                                found: foundWords, invalidWords: invalidWords,
-                                tBoardShown: tBoardShown ?? t)
+                                found: foundWords, invalidAttempts: invalidAttempts,
+                                duplicateAttempts: duplicateAttempts,
+                                touchedCells: touchedCells,
+                                tBoardShown: tBoardShown ?? t,
+                                elapsed: max(0.001, t - (tBoardShown ?? t)))
 
-        // The single most important piece of feedback in the app: the branches that were
-        // there and were not taken, drawn along their own paths, one at a time. A list of
-        // missed words teaches nothing -- seeing the path is the lesson.
-        // Longest first and capped: SPEC 9.2 gives a per-board review fifteen seconds, and
-        // the expensive misses are the long ones. The rest are in the log.
-        let missed = mode.replayMisses && reason != "abandoned"
-            ? Array(mode.targets.filter { targetsRemaining.contains($0) }
-                .sorted { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }
-                .prefix(GameMode.replayCap))
-            : []
-        guard !missed.isEmpty else {
-            // Let the last word's animation land before leaving the board.
-            DispatchQueue.main.asyncAfter(deadline: .now() + (reason == "abandoned" ? 0 : 0.6)) {
-                self.onFinish(result)
-            }
-            return
+        // Straight out. Phase 3 walked the missed branches along their paths here, one
+        // at a time, and called it the most important feedback in the app. In use it is a
+        // wait: the answer is already known by the time the animation starts, and the same
+        // paths are on the verdict screen a moment later, static and tappable, where they
+        // can be looked at for as long as they are wanted rather than for 0.32 s a cell.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (reason == "abandoned" ? 0 : 0.35)) {
+            self.onFinish(result)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            self.replayMissed(Array(missed)) { self.onFinish(result) }
-        }
-    }
-
-    /// One path at a time, slowly enough to follow, with the word in the board's own
-    /// bubble. Longest first: the expensive miss is the one worth looking at.
-    private func replayMissed(_ words: [String], completion: @escaping () -> Void) {
-        replaying = true
-        replayCompletion = completion
-        counterLabel.isHidden = true
-        timeLabel.isHidden = true
-        // Longest first: the expensive miss is the one worth looking at.
-        var queue = words.sorted { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }
-
-        func next() {
-            guard !queue.isEmpty else { return finishReplay() }
-            let word = queue.removeFirst()
-            guard let cells = mode.targetPaths[word], cells.count > 1 else { return next() }
-            bubble.show(word: word, state: .validAndAvailable)
-            replayLayer.path = bezier(through: cells).cgPath
-            // About a third of a second a cell, which is roughly four times a swipe and
-            // slow enough to read the shape rather than just see a line appear.
-            let duration = 0.32 * Double(cells.count - 1)
-            let stroke = CABasicAnimation(keyPath: "strokeEnd")
-            stroke.fromValue = 0
-            stroke.toValue = 1
-            stroke.duration = duration
-            stroke.timingFunction = CAMediaTimingFunction(name: .linear)
-            replayLayer.strokeEnd = 1
-            replayLayer.add(stroke, forKey: "replay")
-            for (i, cell) in cells.enumerated() {
-                let at = duration * Double(i) / Double(cells.count - 1)
-                DispatchQueue.main.asyncAfter(deadline: .now() + at) {
-                    guard self.replaying else { return }
-                    self.tileViews[cell].setSelected(true, state: .validAndAvailable, animated: true)
-                }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.8) {
-                guard self.replaying else { return }
-                for cell in cells {
-                    self.tileViews[cell].setSelected(false, state: .invalid, animated: false)
-                }
-                self.replayLayer.path = nil
-                self.bubble.hide()
-                next()
-            }
-        }
-        next()
     }
 
     @objc private func backTapped() {
-        if replaying {
-            finishReplay()
-            return
-        }
         let alert = UIAlertController(title: mode.kind == .ranked ? "Abandon game?" : "Leave?", message: "It is logged as abandoned.",
                                       preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Keep playing", style: .cancel))
@@ -694,18 +696,17 @@ final class GameViewController: UIViewController {
         present(alert, animated: true)
     }
 
-    /// Ends the replay, whether it ran out or was tapped through. Calling the completion
-    /// exactly once matters: it is what hands the session back its next screen.
-    private func finishReplay() {
-        guard replaying else { return }
-        replaying = false
-        replayLayer.removeAllAnimations()
-        replayLayer.path = nil
-        bubble.hide()
-        for tile in tileViews { tile.setSelected(false, state: .invalid, animated: false) }
-        let completion = replayCompletion
-        replayCompletion = nil
-        completion?()
+    /// "I don't know these." Ends the board now, with the misses recorded as misses --
+    /// not as an abandoned board, which would say he walked out rather than that the
+    /// words are not there yet.
+    ///
+    /// The misses are real evidence and are weighted as such without anything special
+    /// here: SPEC 8.1's opportunity weight is the board's own find rate for the length
+    /// class, so a board stopped after ten seconds has a low weight already and its misses
+    /// say correspondingly little. `end_reason` is logged as `gave_up`, so the two can be
+    /// told apart later if that turns out to matter.
+    @objc private func giveUpTapped() {
+        endGame(reason: "gave_up", at: CACurrentMediaTime())
     }
 
     @objc private func resignedActive() {

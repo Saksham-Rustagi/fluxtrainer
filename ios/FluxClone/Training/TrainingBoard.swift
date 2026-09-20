@@ -16,8 +16,14 @@ enum BoardPurpose: String {
     /// a session (Build plan, "Warm-up mode"), and it costs a line of code: it is an
     /// ordinary ranked board that is not reviewed and does not feed the drill.
     case warmup
+    /// Phase 3.5. A normal scored board seeded with three to five families currently being
+    /// learned, with nothing on screen saying they are there. Phase 4's unannounced
+    /// re-injection is the honest version of this; this is the version that reports
+    /// per family afterwards, for when the player wants to test himself and see the
+    /// result broken out. Both are wanted, and they are not the same thing.
+    case mixed
 
-    var constrainsHook: Bool { self == .drill || self == .acquisition }
+    var constrainsHook: Bool { self == .drill || self == .acquisition || self == .mixed }
     var bandsDensity: Bool { self == .acquisition }
 }
 
@@ -39,6 +45,10 @@ struct HookBoard {
     /// infeasibility fallback). Never silently: the session records it and the summary
     /// says so.
     let degraded: Bool
+    /// Mixed practice: the families the board was seeded with. Only one of them can be
+    /// constrained into the letters; the rest are whatever the search found, which is why
+    /// the board is scored per family rather than assumed to carry all of them.
+    var mixedStems: [String] = []
 
     var letters: [Character] { board.letters }
     var side: Int { board.side }
@@ -197,6 +207,60 @@ enum TrainingBoards {
         return HookBoard(purpose: .acquisition, board: board, solved: solved, hook: hook,
                          litPath: nil, targets: additiveBranchesPresent(stem: hook.stem, solved: solved),
                          stats: stats, degraded: true)
+    }
+
+    /// How many boards to look at for mixed practice. More than a drill's, because the
+    /// thing being searched for is coverage of several families at once rather than a
+    /// target count on one, and a board costs a few milliseconds (tools/trainprobe).
+    static let mixedAttempts = 60
+
+    /// Mixed practice: a board seeded with several chosen families, played as an ordinary
+    /// scored 80-second board with no hint that they are there.
+    ///
+    /// **Only one stem can be handed to the constrained generator**, so the rest are found
+    /// rather than placed. Two things follow, and the first draft got both wrong.
+    ///
+    /// The constrained slot **rotates**. Seeding always on the longest stem is the best
+    /// way to get *that* stem onto the board -- long stems are the hard ones to place --
+    /// and it means every board is built around the same family while the others turn up
+    /// by luck. Rotating over the chosen stems, longest first, spreads the guarantee.
+    ///
+    /// It stops when **all** of them are present, not three of them. Three was a hedge
+    /// against a long search; at 60 attempts of a few milliseconds each the search is
+    /// cheap, and a board carrying three of five families asked for is a board that has
+    /// quietly dropped two.
+    static func mixed(hooks: [Hook], engine: FluxEngine) -> HookBoard? {
+        guard !hooks.isEmpty else { return nil }
+        var rng = SystemRandomNumberGenerator()
+        let wanted = Set(hooks.map(\.stem))
+        let order = hooks.sorted { $0.stem.count > $1.stem.count }
+        var best: (board: HookBoard, hits: Int)?
+        for attempt in 0..<mixedAttempts {
+            let seed = order[attempt % order.count]
+            let side = preferredSide(hook: seed, rng: &rng)
+            let tier = drawTier(side: side, engine: engine, rng: &rng, allowSpam: false)
+            guard let (board, stats) = engine.generateHook(stem: seed.stem, side: side,
+                                                           tier: tier, rootSeed: rng.next(),
+                                                           wordBand: nil)
+            else { continue }
+            let solved = engine.solve(side: side, letters: board.letters)
+            var targets: [String] = []
+            var hits = 0
+            for stem in wanted {
+                let present = additiveBranchesPresent(stem: stem, solved: solved)
+                if !present.isEmpty { hits += 1 }
+                targets += present
+            }
+            let made = HookBoard(purpose: .mixed, board: board, solved: solved, hook: seed,
+                                 litPath: nil, targets: targets, stats: stats,
+                                 degraded: hits < wanted.count, mixedStems: Array(wanted))
+            if best == nil || hits > best!.hits { best = (made, hits) }
+            if hits == wanted.count { return made }
+        }
+        // Fewer families than asked for. Flagged, and reported per family in review, which
+        // is the difference between "it could not place ATE-" and silently serving a board
+        // without it.
+        return best?.board
     }
 
     /// A measurement or warm-up board: ordinary ranked generation, tier and all.

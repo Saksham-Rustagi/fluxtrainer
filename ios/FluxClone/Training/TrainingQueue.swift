@@ -107,8 +107,12 @@ final class TrainingQueue: ObservableObject {
         // derived from find rate and so cannot tell "never heard of it" from "never see
         // it"; a fast correct call can, and it is direct evidence rather than inference.
         let judged = WordKnowledge.allVerdicts()
+        // The inverse of learning, which Phase 3 had no way to see: a branch that was
+        // being taken and is not any more. The player's own history says this is the
+        // normal case, so a queue that only ever promotes would be wrong about most words.
+        let recent = Progression.recentUnprompted()
         var beliefs: [String: Double] = [:]
-        var beliefRows: [[String: Any?]] = []
+        var beliefRows: [[Any?]] = []
         var promotedRate = 0, stillUntrusted = 0
 
         var out: [Ranked] = []
@@ -135,9 +139,15 @@ final class TrainingQueue: ObservableObject {
                 case .shaky: status = status == "known" ? "learning" : status
                 case .none, .some(.unjudged): break
                 }
+                // A slip outranks everything above it. The affix grid can say he knows the
+                // word and belief can say he used to find it; neither is an argument that
+                // he is finding it now, and finding it now is what the queue is for.
+                let slipping = Progression.isSlipping(established: branch.myRate,
+                                                      recent: recent[branch.word])
+                if slipping { status = "slipping" }
                 switch status {
                 case "known": owned += 1
-                case "learning": learning += 1
+                case "learning", "slipping": learning += 1
                 default: unknown += 1
                 }
 
@@ -149,12 +159,11 @@ final class TrainingQueue: ObservableObject {
                 // them back unchanged would be a hundred thousand rows saying nothing.
                 if words[branch.word] != nil {
                     beliefRows.append([
-                        "word": branch.word, "logit": log(belief / (1 - belief)),
-                        "belief": belief,
-                        "inapp_presences": state.inAppPresences, "inapp_finds": state.inAppFinds,
-                        "inapp_weight": state.weightedOpportunity,
-                        "inapp_find_weight": state.weightedFinds,
-                        "my_rate": myRate, "updated_wall": TrainingLog.now(),
+                        branch.word, log(belief / (1 - belief)), belief,
+                        state.inAppPresences, state.inAppFinds,
+                        state.weightedOpportunity, state.weightedFinds,
+                        myRate, TrainingLog.now(), status, slipping ? 1 : 0,
+                        status,   // announced_status, on first insert only
                     ])
                 }
                 let topQTrusted = branch.nTopQuartile >= Self.minTopQuartile
@@ -195,7 +204,7 @@ final class TrainingQueue: ObservableObject {
 
         out.sort { $0.score > $1.score }
         ranked = out
-        Database.shared.writeMany("word_belief", beliefRows)
+        Database.shared.executeMany(Self.beliefUpsert, beliefRows)
         self.beliefs = beliefs
         promotable = (promotedRate, stillUntrusted)
         let now = Date()
@@ -204,12 +213,43 @@ final class TrainingQueue: ObservableObject {
                                               "value": Self.iso.string(from: now)])
     }
 
+    /// `announced_status` is seeded to the status on the first write and never touched
+    /// afterwards, which is what makes a transition mean a *change*.
+    ///
+    /// Without the seed, the first row the app ever writes for a word has a NULL
+    /// `announced_status` and so reads as an unannounced crossing -- review then announced
+    /// "ALINE: you found it on 0 of the last 3 boards it appeared on. Owned." The word had
+    /// not crossed anything; it arrived owned, out of 2,865 ranked boards, and the app was
+    /// simply seeing it for the first time. And without the `ON CONFLICT` clause, the
+    /// INSERT OR REPLACE `writeMany` builds would reset the column on every recompute, so
+    /// every announcement would repeat for ever.
+    static let beliefUpsert = """
+        INSERT INTO word_belief(word, logit, belief, inapp_presences, inapp_finds,
+                                inapp_weight, inapp_find_weight, my_rate, updated_wall,
+                                status, slipping, announced_status)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(word) DO UPDATE SET
+            logit = excluded.logit, belief = excluded.belief,
+            inapp_presences = excluded.inapp_presences, inapp_finds = excluded.inapp_finds,
+            inapp_weight = excluded.inapp_weight,
+            inapp_find_weight = excluded.inapp_find_weight,
+            my_rate = excluded.my_rate, updated_wall = excluded.updated_wall,
+            status = excluded.status, slipping = excluded.slipping,
+            -- Seeded once and then left alone. COALESCE rather than nothing at all,
+            -- because a row written by Phase 3 has no `announced_status` and would
+            -- otherwise announce on the first recompute after the upgrade -- every
+            -- observed word at once, which is the opposite of "said once".
+            announced_status = COALESCE(word_belief.announced_status, excluded.status)
+        """
+
     func belief(_ word: String) -> Double? { beliefs[word] }
 
     /// The line the brief asks for somewhere unobtrusive: whether what is on screen is
     /// current.
     var recomputedText: String {
         guard let lastRecomputed else { return "queue not yet recomputed" }
+        let age = Date().timeIntervalSince(lastRecomputed)
+        if age < 60 { return "queue up to date" }
         let f = RelativeDateTimeFormatter()
         return "queue recomputed \(f.localizedString(for: lastRecomputed, relativeTo: Date()))"
     }

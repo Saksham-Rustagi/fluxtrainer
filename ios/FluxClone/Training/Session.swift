@@ -51,6 +51,13 @@ final class TrainingSession: ObservableObject {
     /// already happened -- the misses were drawn on the grid.
     struct Verdict {
         let hook: Hook?
+        /// The board, so the verdict can draw a word's path. This is where the timeout
+        /// replay went: static, tappable, and available for as long as it is wanted.
+        let letters: [Character]
+        let side: Int
+        /// The stem the drill lit, so the verdict board shows what the branches were
+        /// hanging off rather than an unexplained path in the middle of the grid.
+        let stemPath: [Int]
         /// Found, with seconds to find and how that compares to the last time this word
         /// was drilled. For a word you already know, seconds is the only thing that can
         /// move, so found/missed alone would look identical in week 1 and week 6.
@@ -66,7 +73,14 @@ final class TrainingSession: ObservableObject {
             let seconds: Double?
             let previousSeconds: Double?
             let knowledge: WordKnowledge.Verdict
+            /// What the queue knows about the word: what it is worth a game, how the
+            /// field does on it, how often it turns up. Nil for a word that is on the
+            /// board but not in this hook's branch list.
+            let branch: Branch?
+            let path: [Int]
             var id: String { word }
+
+            var gain: Double { branch?.expectedGain ?? 0 }
 
             /// Only meaningful on a word the grid says you know: it is a vision result.
             var improvement: Double? {
@@ -108,18 +122,22 @@ final class TrainingSession: ObservableObject {
 
     // MARK: Lifecycle
 
-    init(queue: TrainingQueue, shortDay: Bool) {
+    /// `forcedHook` is review's way in. The app still chooses the hook on a plain daily
+    /// session -- a queue of 10,594 is not a decision to make every morning -- but when
+    /// review has just shown him three TORE- branches he stepped over, the stem to drill
+    /// is not in question and asking the queue again would be perverse.
+    init(queue: TrainingQueue, shortDay: Bool, forcedHook: Hook? = nil) {
         self.queue = queue
         self.shortDay = shortDay
-        if let saved = Resume.load(), saved.shortDay == shortDay {
+        if forcedHook == nil, let saved = Resume.load(), saved.shortDay == shortDay {
             sessionId = saved.sessionId
             plan = saved.plan
             cursor = saved.cursor
             summary.drilledHook = saved.plan.compactMap(Self.stem(of:)).first
         } else {
             sessionId = UUID().uuidString
-            let newHook = queue.nextHook()
-            let due = queue.dueHooks(limit: 2)
+            let newHook = forcedHook ?? queue.nextHook()
+            let due = forcedHook == nil ? queue.dueHooks(limit: 2) : []
             plan = Self.buildPlan(newHook: newHook, due: due, shortDay: shortDay)
             cursor = 0
             summary.drilledHook = newHook?.stem
@@ -217,7 +235,9 @@ final class TrainingSession: ObservableObject {
         let engine = self.engine
         engine.perform({ () -> HookBoard? in
             switch purpose {
-            case .warmup, .measurement:
+            // A session never serves a mixed board -- mixed practice is reached from Play,
+            // not from the plan -- so it falls in with the ranked generation here.
+            case .warmup, .measurement, .mixed:
                 return TrainingBoards.ranked(purpose: purpose, engine: engine)
             case .drill:
                 return hook.flatMap { TrainingBoards.drill(hook: $0, engine: engine) }
@@ -250,18 +270,14 @@ final class TrainingSession: ObservableObject {
             // 30 to 45 seconds, scaled to how much is on the board. Stem lit, a counter,
             // the clock, and no other text.
             let seconds = min(45.0, 30.0 + 3.0 * Double(max(0, board.targets.count - 3)))
-            var paths: [String: [Int]] = [:]
-            for word in board.targets { paths[word] = board.path(for: word) }
             mode = GameMode(kind: .branchCompletion, duration: seconds, showsScore: false,
                             litPath: board.litPath ?? [], targets: Set(board.targets),
-                            showsCounter: true, replayMisses: true, targetPaths: paths)
+                            showsCounter: true, canGiveUp: true)
         case .acquisition:
             // 60 seconds, everything scores, so it feels like a game rather than a quiz.
-            var paths: [String: [Int]] = [:]
-            for word in board.targets { paths[word] = board.path(for: word) }
             mode = GameMode(kind: .familySweep, duration: 60, showsScore: true,
-                            targets: Set(board.targets), replayMisses: true, targetPaths: paths)
-        case .measurement:
+                            targets: Set(board.targets))
+        case .measurement, .mixed:
             mode = GameMode(kind: .ranked, duration: GameViewController.duration)
         }
         TrainingLog.startExercise(id: id, sessionId: sessionId, seq: seq, kind: mode.kind,
@@ -288,7 +304,7 @@ final class TrainingSession: ObservableObject {
         switch board.purpose {
         case .drill: evidence = .litDrill
         case .acquisition: evidence = .familySweep
-        case .warmup, .measurement: evidence = .unpromptedBoard
+        case .warmup, .measurement, .mixed: evidence = .unpromptedBoard
         }
         let outcome = TrainingLog.finishExercise(
             id: screenState.exerciseId, sessionId: sessionId, board: board, result: result,
@@ -323,19 +339,30 @@ final class TrainingSession: ObservableObject {
         let knowledge = board.hook.map { WordKnowledge.verdicts(forStem: $0.stem) } ?? [:]
         let previous = Self.previousFindTimes(exerciseId: screenState.exerciseId,
                                               words: board.targets)
+        // Ordered by what the word is worth a game, not by how fast it was found. Time
+        // is the result; value is the reason the word is on the list at all, and a page
+        // sorted by result cannot be read as "these are the ones to learn".
         func outcomes(_ words: [String]) -> [Verdict.Outcome] {
             words.map { word in
                 Verdict.Outcome(word: word, seconds: times[word], previousSeconds: previous[word],
-                                knowledge: knowledge[word] ?? .unjudged)
+                                knowledge: knowledge[word] ?? .unjudged,
+                                branch: board.hook?.branch(word),
+                                path: board.path(for: word) ?? [])
             }
-            .sorted { ($0.seconds ?? .greatestFiniteMagnitude) < ($1.seconds ?? .greatestFiniteMagnitude) }
+            .sorted {
+                $0.gain != $1.gain ? $0.gain > $1.gain
+                    : (($0.seconds ?? .greatestFiniteMagnitude)
+                       < ($1.seconds ?? .greatestFiniteMagnitude))
+            }
         }
         for word in outcome.found where (knowledge[word] ?? .unjudged) == .known {
             if let t = times[word] { summary.sightTimes.append(t) }
         }
 
         let canRepeat = board.purpose == .drill
-        screen = .verdict(Verdict(hook: board.hook, found: outcomes(outcome.found),
+        screen = .verdict(Verdict(hook: board.hook, letters: board.letters, side: board.side,
+                                  stemPath: board.litPath ?? [],
+                                  found: outcomes(outcome.found),
                                   missed: outcomes(outcome.missed),
                                   stemWasLit: board.litPath != nil, score: result.score,
                                   canRepeat: canRepeat))

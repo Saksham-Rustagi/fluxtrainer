@@ -59,14 +59,26 @@ final class Sounds {
     private var started = false
     private static let sfxVolume: Float = 0.8
 
+    /// On unless it has been turned off. `bool(forKey:)` rather than `object as? Bool`
+    /// because the argument domain -- how a UI test sets this -- stores `-soundEnabled NO`
+    /// as the string "NO", which the cast silently drops and the coercion reads correctly.
     var enabled: Bool {
-        get { UserDefaults.standard.object(forKey: "soundEnabled") as? Bool ?? true }
+        get {
+            guard UserDefaults.standard.object(forKey: "soundEnabled") != nil else { return true }
+            return UserDefaults.standard.bool(forKey: "soundEnabled")
+        }
         set { UserDefaults.standard.set(newValue, forKey: "soundEnabled") }
     }
 
     private init() {}
 
+    /// Called when a board goes on screen, so turning sound back on takes effect at the
+    /// next board rather than needing a relaunch.
     func start() {
+        // `play` checked this and `start` did not, so turning sound off still activated
+        // the audio session, preloaded fourteen buffers and started an eight-node engine
+        // -- everything except making a noise.
+        guard enabled else { return }
         queue.async { [self] in
             guard !started else { return }
             try? AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])

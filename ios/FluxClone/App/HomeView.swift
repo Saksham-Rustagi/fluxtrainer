@@ -3,98 +3,222 @@ import UIKit
 
 private let fluxAccent = Color(uiColor: FluxTheme.main)
 private let fluxBackground = Color(uiColor: FluxTheme.bg)
+private let panel = Color(uiColor: FluxTheme.subAlt)
 
-struct HomeView: View {
+/// The home tab, and the front door. **Playing a board is one tap from launch with no
+/// configuration.** Everything that used to sit above it -- the trainer, the overrides --
+/// is either below it or in another tab.
+struct PlayView: View {
     @EnvironmentObject var model: AppModel
     @State private var games: [Database.GameSummary] = []
-    @State private var exportURL: URL?
-    @State private var exportError: String?
     @State private var showSettings = false
-    @State private var lastExport = Exporter.lastAnyExport
+    @State private var mixedCandidates: [MixedCandidate] = []
+    @State private var mixedSelection: Set<String> = []
+    @State private var showMixed = false
 
     var body: some View {
         NavigationStack {
-            List {
-                // Phase 3. The trainer sits above Play because the curriculum is why the
-                // app exists; Play is the clone, and it is now the measurement path.
-                Section {
-                    if let queue = model.queue {
-                        TrainCard(queue: queue) { shortDay in model.train(shortDay: shortDay) }
-                            .listRowBackground(fluxAccent.opacity(0.25))
-                    } else if let error = model.queueError {
-                        Text("Training is off: \(error)")
-                            .font(.footnote).foregroundStyle(.orange)
-                    } else {
-                        HStack { Spacer(); ProgressView(); Spacer() }
-                    }
+            ScrollView {
+                VStack(spacing: 14) {
+                    playButton
+                    mixedButton
+                    trainRow
+                    recent
                 }
-
-                Section {
-                    Button(action: model.play) {
-                        HStack {
-                            Spacer()
-                            if model.waitingToPlay || (!model.engineReady) {
-                                ProgressView()
-                            } else {
-                                Text("Play").font(.system(size: 28, weight: .heavy))
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 14)
-                    }
-                    .disabled(!model.engineReady)
-                    .listRowBackground(fluxAccent.opacity(0.25))
-
-                    Picker("Grid", selection: $model.gridOverride) {
-                        Text("Ranked mix").tag(Int?.none)
-                        Text("4x4").tag(Int?.some(4))
-                        Text("5x5").tag(Int?.some(5))
-                    }
-                    Picker("Tier", selection: $model.tierOverride) {
-                        Text("Ranked mix").tag(Tier?.none)
-                        ForEach(Tier.allCases, id: \.self) { Text($0.displayName).tag(Tier?.some($0)) }
-                    }
-                } footer: {
-                    Text("Overrides are for testing; games played with one are flagged in the log.")
-                }
-
-                Section("Data") {
-                    Button("Export database to Files") { exportNow() }
-                    HStack {
-                        Text("Last export")
-                        Spacer()
-                        Text(lastExportText).foregroundStyle(exportOverdue ? .red : .secondary)
-                    }
-                    if let exportError { Text(exportError).foregroundStyle(.red) }
-                }
-
-                Section("Games (\(games.count) shown)") {
-                    if games.isEmpty { Text("No games yet").foregroundStyle(.secondary) }
-                    ForEach(games) { g in GameRow(game: g) }
-                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 30)
             }
-            .scrollContentBackground(.hidden)
             .background(fluxBackground)
-            .navigationTitle("Flux Clone")
+            .navigationTitle("Flux")
             .toolbar {
+                NavigationLink { DataView() } label: { Image(systemName: "tray.and.arrow.up") }
                 Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
-            .sheet(item: $exportURL) { url in
-                ExportPicker(url: url) { saved in
-                    if saved {
-                        Exporter.lastManualExport = Date()
-                        lastExport = Exporter.lastAnyExport
-                    }
-                    exportURL = nil
-                }
+            .sheet(isPresented: $showMixed) {
+                MixedPickerView(candidates: mixedCandidates, selection: $mixedSelection,
+                                play: {
+                                    showMixed = false
+                                    model.playMixed(stems: Array(mixedSelection))
+                                },
+                                cancel: { showMixed = false })
             }
             .onAppear(perform: reload)
         }
     }
 
+    private var playButton: some View {
+        Button(action: model.play) {
+            HStack {
+                Spacer()
+                if model.waitingToPlay || !model.engineReady {
+                    ProgressView().tint(Color(uiColor: FluxTheme.bg))
+                } else {
+                    Text("Play").font(.system(size: 34, weight: .heavy))
+                }
+                Spacer()
+            }
+            .padding(.vertical, 24)
+            .background(RoundedRectangle(cornerRadius: 16).fill(fluxAccent))
+            .foregroundStyle(Color(uiColor: FluxTheme.bg))
+        }
+        .disabled(!model.engineReady)
+        .padding(.top, 8)
+    }
+
+    /// Section 5. A normal board with the families you pick quietly seeded into it,
+    /// scored per family afterwards.
+    private var mixedButton: some View {
+        Button(action: openMixed) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Mixed practice").font(.headline)
+                    Text(mixedSubtitle)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 12).fill(panel))
+            .foregroundStyle(.white)
+        }
+        .disabled(model.queue == nil)
+    }
+
+    /// The last set is remembered and shown, so repeating a mix is one tap and changing
+    /// it is two.
+    private var mixedSubtitle: String {
+        guard !mixedSelection.isEmpty else {
+            return "Pick families and hide them in an ordinary board"
+        }
+        return mixedSelection.sorted().map { "\($0)-" }.joined(separator: " ")
+    }
+
+    private func openMixed() {
+        guard let queue = model.queue else { return }
+        let ranked = queue.ranked
+        let index = FamilyIndex.shared
+        DispatchQueue.global(qos: .userInitiated).async {
+            let found = MixedCandidates.load(queue: ranked, index: index)
+            DispatchQueue.main.async {
+                mixedCandidates = found
+                // Shuffled within the top of the list on first open, so two sessions in a
+                // row are not the same board.
+                if mixedSelection.isEmpty || !mixedSelection.isSubset(
+                    of: Set(found.map(\.hook.stem))) {
+                    mixedSelection = MixedCandidates.defaultSelection(from: found)
+                }
+                showMixed = true
+            }
+        }
+    }
+
+    /// Demoted on purpose. The drill is reached from review or from a family, which is
+    /// where the case for drilling a particular stem actually gets made -- but a daily
+    /// session is still one tap for the days he just wants to be told what to do.
+    @ViewBuilder
+    private var trainRow: some View {
+        if let queue = model.queue {
+            TrainCard(queue: queue) { shortDay in model.train(shortDay: shortDay) }
+                .padding(14)
+                .frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: 12).fill(panel))
+        } else if let error = model.queueError {
+            Text("Training is off: \(error)")
+                .font(.footnote).foregroundStyle(.orange)
+        }
+    }
+
+    private var recent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recent").font(.headline).foregroundStyle(.white)
+                Spacer()
+                Text("\(games.count)").font(.caption).foregroundStyle(.tertiary)
+            }
+            .padding(.top, 10)
+            if games.isEmpty {
+                Text("No games yet").font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(games.prefix(25)) { g in
+                GameRow(game: g)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(panel))
+            }
+        }
+    }
+
+    private func reload() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let rows = Database.shared.recentGames(limit: 200)
+            DispatchQueue.main.async { games = rows }
+        }
+    }
+}
+
+/// Export, the board overrides, and the counts. Off the front door because none of it is
+/// part of playing.
+struct DataView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var exportURL: URL?
+    @State private var exportError: String?
+    @State private var lastExport = Exporter.lastAnyExport
+    @State private var games = 0
+
+    var body: some View {
+        List {
+            Section {
+                Picker("Grid", selection: $model.gridOverride) {
+                    Text("Ranked mix").tag(Int?.none)
+                    Text("4x4").tag(Int?.some(4))
+                    Text("5x5").tag(Int?.some(5))
+                }
+                Picker("Tier", selection: $model.tierOverride) {
+                    Text("Ranked mix").tag(Tier?.none)
+                    ForEach(Tier.allCases, id: \.self) { Text($0.displayName).tag(Tier?.some($0)) }
+                }
+            } header: {
+                Text("Board overrides")
+            } footer: {
+                Text("Overrides are for testing; games played with one are flagged in the log.")
+            }
+
+            Section("Data") {
+                Button("Export database to Files") { exportNow() }
+                HStack {
+                    Text("Last export")
+                    Spacer()
+                    Text(lastExportText).foregroundStyle(exportOverdue ? .red : .secondary)
+                }
+                HStack {
+                    Text("Games logged")
+                    Spacer()
+                    Text("\(games)").foregroundStyle(.secondary)
+                }
+                if let exportError { Text(exportError).foregroundStyle(.red) }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(fluxBackground)
+        .navigationTitle("Data")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $exportURL) { url in
+            ExportPicker(url: url) { saved in
+                if saved {
+                    Exporter.lastManualExport = Date()
+                    lastExport = Exporter.lastAnyExport
+                }
+                exportURL = nil
+            }
+        }
+        .onAppear { games = Database.shared.completedGameCount() }
+    }
+
     private var exportOverdue: Bool {
-        guard !games.isEmpty else { return false }
+        guard games > 0 else { return false }
         guard let lastExport else { return true }
         return Date().timeIntervalSince(lastExport) > 7 * 24 * 3600
     }
@@ -102,16 +226,6 @@ struct HomeView: View {
     private var lastExportText: String {
         guard let lastExport else { return "never" }
         return RelativeDateTimeFormatter().localizedString(for: lastExport, relativeTo: Date())
-    }
-
-    private func reload() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let rows = Database.shared.recentGames(limit: 200)
-            DispatchQueue.main.async {
-                games = rows
-                lastExport = Exporter.lastAnyExport
-            }
-        }
     }
 
     private func exportNow() {
@@ -173,50 +287,5 @@ struct ExportPicker: UIViewControllerRepresentable {
         init(done: @escaping (Bool) -> Void) { self.done = done }
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { done(true) }
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { done(false) }
-    }
-}
-
-struct ResultsView: View {
-    @EnvironmentObject var model: AppModel
-    let result: GameResult
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            Text("\(result.score)")
-                .font(Font(FluxFont.bold(68)))
-                .foregroundStyle(.white)
-            Text("\(result.words) words").font(.title3).foregroundStyle(.white.opacity(0.8))
-            VStack(alignment: .leading, spacing: 6) {
-                row("Board", "\(result.board.side)x\(result.board.side) \(result.board.tier.displayName)")
-                row("Potential", "\(result.board.potentialPoints) pts · \(result.board.potentialWords) words")
-                row("Invalid attempts", "\(result.invalid)")
-                row("Duplicate re-swipes", "\(result.duplicates)")
-            }
-            .font(.body.monospacedDigit())
-            .padding()
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(uiColor: FluxTheme.subAlt)))
-            Spacer()
-            Button(action: model.play) {
-                Text("Next game").font(.title2.weight(.heavy)).frame(maxWidth: .infinity).padding()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(fluxAccent)
-            .foregroundStyle(Color(uiColor: FluxTheme.bg))
-            .disabled(model.nextBoard == nil && model.waitingToPlay)
-            Button("Home") { model.screen = .home }
-                .padding(.bottom)
-        }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(fluxBackground)
-    }
-
-    private func row(_ k: String, _ v: String) -> some View {
-        HStack {
-            Text(k).foregroundStyle(.secondary)
-            Spacer()
-            Text(v).foregroundStyle(.white)
-        }
     }
 }

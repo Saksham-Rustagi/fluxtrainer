@@ -32,7 +32,7 @@ import os
 import hooks as H
 import qcommon as Q
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # A branch below this reachability is never on the board when the stem is (hooks.py's
 # BRANCH_REACH_FLOOR). Kept out of the record for the same reason it is kept out of the
@@ -52,6 +52,17 @@ BRANCH_FIELDS = [
     "word", "cls", "ext", "points", "reachability", "reachSource",
     "myRate", "topQuartileRate", "nTopQuartile", "presences", "finds", "opportunity",
     "presencesPerGame", "belief", "status", "expectedGain", "earns", "misswiped",
+    # Schema 2. rank.py splits every word on whether the *field* takes it less than 10% of
+    # the time: "alpha" is vocabulary almost nobody has, "par" is a word you are expected
+    # to take and do not. That is the same know-against-see distinction the affix grid
+    # makes, measured on other players instead of on him, and the app could not show it
+    # because only the *hook* carried a track.
+    #
+    # The rate ships and the label does not. `track` is exactly `fieldRate < 0.10`
+    # (rank.py), so carrying both would be 700 KB of a second source of truth, and the
+    # rate is the more useful of the two on screen: "the field finds it 4% of the time"
+    # says why it is alpha.
+    "fieldRate",
 ]
 
 # The session draws from here (Phase 3 prompt, "The session"): top of the queue filtered to
@@ -99,6 +110,8 @@ def _branch(b, misswiped):
         "expectedGain": _f(b.get("gain")),
         "earns": bool(b.get("earns", False)),
         "misswiped": int(misswiped.get(b["word"], 0)),
+        # The field's take rate. "alpha" is `fieldRate < 0.10`, derived on device.
+        "fieldRate": _f(b.get("fieldRate")),
     }
 
 

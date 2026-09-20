@@ -8,10 +8,12 @@ import SQLite3
 /// game time.
 final class Database {
     static let shared = Database()
-    /// 1: Phase 1, the play log. 2: Phase 3, the training log. The Phase 1 tables are
-    /// untouched by 2 -- a training board writes an ordinary `game` and `attempt` row, so
-    /// `tools/clone_report` keeps working, with `game.purpose` telling the two apart.
-    static let schemaVersion = 2
+    /// 1: Phase 1, the play log. 2: Phase 3, the training log. 3: Phase 3.5, review --
+    /// `hook_meeting` and two status columns on `word_belief`. The Phase 1 tables are
+    /// untouched by any of them -- a training board writes an ordinary `game` and
+    /// `attempt` row, so `tools/clone_report` keeps working, with `game.purpose` telling
+    /// the two apart.
+    static let schemaVersion = 3
 
     let url: URL
     private var db: OpaquePointer?
@@ -158,8 +160,43 @@ final class Database {
             my_rate REAL, updated_wall TEXT
         );
 
+        -- Schema 3. One row per (board, family) for every board played, ranked included.
+        -- Written from the board's own solve, so "how often do I meet this stem and how
+        -- much of it do I take" is a grouped select rather than a scan over every word on
+        -- every board. This is what My Stems and the per-stem trend read.
+        CREATE TABLE IF NOT EXISTS hook_meeting(
+            game_id TEXT, stem TEXT,
+            present INTEGER, found INTEGER,
+            points_present INTEGER, points_found INTEGER,
+            purpose TEXT, grid INTEGER, drilled INTEGER DEFAULT 0,
+            wall TEXT,
+            PRIMARY KEY(game_id, stem)
+        );
+        CREATE INDEX IF NOT EXISTS hook_meeting_stem ON hook_meeting(stem, wall);
+
+        -- What review actually put on screen, per board. The phase's gate is a human
+        -- question -- did it tell me something I did not know and would act on -- and it
+        -- cannot be asked offline unless what was shown is recorded. Also the fastest way
+        -- to catch a stuck ranker: the same stem leading five boards running.
+        CREATE TABLE IF NOT EXISTS review_item(
+            game_id TEXT, rank INTEGER,
+            kind TEXT,                  -- family | word
+            stem TEXT, word TEXT,
+            priority INTEGER, value REAL,
+            covered INTEGER, missed INTEGER,
+            wall TEXT,
+            PRIMARY KEY(game_id, rank)
+        );
+        CREATE INDEX IF NOT EXISTS review_item_stem ON review_item(stem);
+
         CREATE TABLE IF NOT EXISTS queue_state(key TEXT PRIMARY KEY, value TEXT);
         """)
+        // Schema 3 adds two columns to a table schema 2 already created. `status` is what
+        // the recompute decided; `announced_status` is what the player has been told. A
+        // transition is surfaced exactly once, which is the difference between the two.
+        for column in ["status TEXT", "announced_status TEXT", "slipping INTEGER DEFAULT 0"] {
+            sqlite3_exec(db, "ALTER TABLE word_belief ADD COLUMN \(column)", nil, nil, nil)
+        }
     }
 
     // MARK: Writes
@@ -214,6 +251,32 @@ final class Database {
 
     func execute(_ sql: String, _ values: [Any?] = []) {
         queue.async { self.run(sql, values) }
+    }
+
+    /// One prepared statement over many rows, in a transaction. `writeMany` builds an
+    /// INSERT OR REPLACE from the row's keys, which is wrong wherever a column has to
+    /// survive the write -- `word_belief.announced_status` is the case that forced this.
+    func executeMany(_ sql: String, _ rows: [[Any?]]) {
+        guard !rows.isEmpty else { return }
+        queue.async {
+            self.exec("BEGIN")
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(self.db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                print("SQL prepare failed: \(String(cString: sqlite3_errmsg(self.db))) in \(sql)")
+                self.exec("COMMIT")
+                return
+            }
+            for row in rows {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                self.bind(stmt, row)
+                if sqlite3_step(stmt) != SQLITE_DONE {
+                    print("SQL step failed: \(String(cString: sqlite3_errmsg(self.db)))")
+                }
+            }
+            sqlite3_finalize(stmt)
+            self.exec("COMMIT")
+        }
     }
 
     /// Synchronous read. `body` sees one prepared statement positioned on each row; use
