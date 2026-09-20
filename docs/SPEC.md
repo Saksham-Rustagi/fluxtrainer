@@ -33,24 +33,33 @@ You open the app, play three to five boards drawn from the real ranked distribut
 
 ## 2. Game model
 
-Everything here is implemented as data in a versioned `RulesetConfig`, not as constants in code. The generation parameters are partly guesswork and will change when the Flux developer confirms them, and when they change every derived statistic has to be recomputed.
+Everything here is implemented as data in a versioned `RulesetConfig`, not as constants in code. When a generation parameter changes, every derived statistic has to be recomputed.
+
+**Sources and citations.** Ranked boards are generated **server-side**, by the Node backend (`NodeJS-backend`, served from Heroku, `/api/ranked/play` and `/api/ranked/play-v2`). That repository is not accessible. What *is* accessible is the iOS client, `github.com/AStout75/flux-ios` (read at `cb74343`, 2026-08-30), which carries a client-side generator for offline play plus two ports that state in their own comments that they mirror the server: `SeedWordGenerator.swift` ("Mirrors NodeJS-backend/utils/seedWords.js and config/rankedBoardConfigs.js") and `Lab/LabBoardGenerator.swift` ("matches server LETTER_FREQ exactly", "bigram table from server boardLab.js"). Citations below are `flux-ios@<sha>`. A parameter is marked **confirmed** only where the client code states it and the 9,034-board ranked export (`data/ranked/`) independently agrees with it; client code alone, or the export alone, is marked as such.
 
 ### 2.1 Confirmed rules
 
-| Rule | Value |
-| --- | --- |
-| Dictionary | Collins 21 (CSW21) |
-| Game length | 80 seconds |
-| Grids | 4x4 and 5x5 |
-| Adjacency | 8-way |
-| Tile reuse | Not allowed within a word |
-| Q tile | Plain Q, U is a separate tile |
-| Board | Static for the whole game |
-| Duplicates | Words found by both players still score for both |
+| Rule | Value | Source |
+| --- | --- | --- |
+| Dictionary | **CSW21 minus 419 words**: 279,077 words, against 279,496 in full CSW21. The 419 are the offensive-word removals (ABO, BANTU, BOONG, LES, NIGER, YID, TAIG, HORI, …). No house additions: every client word is in CSW21 | `flux-ios@46fed8a` ("Dictionary v1", 2025-05-09, `CSW21_space_defs.txt`); unchanged since, including in `word_list.json` (`@25e4eb0`). Export: the 419 appear 7,698 times across 4,477 of the 9,034 real boards and neither player **ever** found one in 18,068 player-games |
+| Game length | 80 seconds | Export: `duration` = 80 on all 9,034 games |
+| Grids | 4x4 and 5x5 (5x5 from season 2 onward, see 2.5) | Export |
+| Minimum word length | 3 | `flux-ios@3a8e30c` `TrieNode.swift` (`newPath.count >= 3`); export: shortest credited word is 3 |
+| Adjacency | 8-way | `flux-ios` `TrieNode.swift` `directions`; `HighPerformanceTouchHandlerOptimized.swift` adjacency check |
+| Tile reuse | Not allowed within a word. Sliding back onto a tile already in the current path is **ignored**, not a backtrack: it neither deselects nor extends | `HighPerformanceTouchHandlerOptimized.swift` (`selectedLetters.contains` → return) |
+| Re-swiping a found word | Shown as `validButFound`, scores nothing, no penalty beyond the time spent | `Board/BoardView.swift` `selectLetter` |
+| Q tile | Plain Q, U is a separate tile | Letter table has Q as a single letter |
+| Board | Static for the whole game | |
+| Duplicates | Words found by both players still score for both | Export: 8,980 of 9,034 games contain words both players found; all 18,068 player scores equal the plain table sum of that player's own distinct words |
+| Opponent visibility | Ranked is asynchronous. The in-game HUD shows only the opponent's name/Elo chip, never their live score | `BoardView.swift` (`RankedOpponentChip`; live score streaming is Quick Play and live sessions only) |
 
 The duplicate rule matters more than it looks. Because there is no unique-word bonus, obscure words have no premium over common ones. A word is worth exactly its points, and the only question is what it costs you in time. That pushes the whole app toward throughput and selection rather than toward rare-word hoarding.
 
+**The dictionary difference is load-bearing.** Every solver artifact built against full CSW21 (including `data/ranked/solutions.parquet` and every Phase 1 table) credits the 419 removed words. LES alone sits on 2,446 of the real boards. Rebuild the DAWG from the 279,077-word Flux list (`data/flux_removed_words.txt` is the diff) before trusting any potential, miss list or family statistic that touches them.
+
 ### 2.2 Scoring
+
+Confirmed: `flux-ios@3a8e30c` (`calculateScoreForLength`, unchanged since 2024-11-15), and all 18,068 player scores in the export reproduce exactly from this table with no remainder. There is **no bonus or multiplier** in ranked. The variant hooks in `calculateScore` (`scrabbleScoring`, `scattergories`, `wordChains`) are unimplemented placeholders.
 
 | Length | Points | Points per letter |
 | --- | --- | --- |
@@ -61,17 +70,37 @@ The duplicate rule matters more than it looks. Because there is no unique-word b
 | 7 | 1,800 | 257 |
 | 8 | 2,200 | 275 |
 | 9 | 2,600 | 289 |
-| n ≥ 7 | 1400 + 400(n−6) | — |
+| n ≥ 6 | 400(n−3) + 200 | — |
 
 The marginal jump flattens after 6. Going from 5 to 6 letters is worth 600 points; every letter after that is worth 400. So 6-letter words are the highest-leverage length in the game, and 7s and 8s are worth chasing mostly when they are extensions of a 6 you already have on screen.
 
-### 2.3 Ranked generation (as published, treated as spec)
+### 2.3 Ranked generation
 
-- **Grid split:** 60% 4x4, 40% 5x5.
-- **Seeding:** 50% of boards contain a secret seed word.
-- **Seed lengths:** 4x4 uses 8, 9, 10, or 11. 5x5 uses 9, 10, 11, 12, or 13.
-- **Longest seeds** (11 on 4x4, 13 on 5x5) only appear on Spam boards.
-- **Quality tiers**, implemented as best-of-N over generated candidates:
+Confirmed parameters first. The candidate generator is the one in `flux-ios` `Board/Utils/BoggleGenerator.swift` (all generation parameters unchanged since `fa8fb2d`, 2025-02-25). Simulated under the tier table below, it reproduces the letter marginal of the real boards to within sampling noise from season 7 onward (2.5).
+
+- **Letter distribution** — confirmed. A weighted distribution, **not dice**. Base weights (`flux-ios@fa8fb2d` `BoardUtils.swift` `letterFrequencies`; the same numbers are restated as the server's `LETTER_FREQ` in `@525c64b` `LabBoardGenerator.swift`):
+
+  ```
+  E 12.02  T 9.10  A 8.12  O 7.68  I 7.31  N 6.95  S 6.28  R 6.02  H 5.92
+  D 4.32   L 3.98  U 2.88  C 2.71  M 2.61  F 2.30  Y 2.11  W 2.09  G 2.03
+  P 1.82   B 1.49  V 1.11  K 0.69  X 0.17  Q 0.11  J 0.10  Z 0.07
+  ```
+
+  These are running-text English frequencies, not CSW21 word frequencies.
+- **At most 2 of any letter on a board** — confirmed. A hard cap applied during the fill: once a letter reaches count 2, it is removed from every remaining cell's options and the other weights renormalize (`@fa8fb2d` `BoggleGenerator.generateSingleBoard`). Export: **all 9,034 real boards** have a maximum letter multiplicity of exactly 2, in every season. Without the cap, 77% of 4x4 and 99.9% of 5x5 boards would contain a triple. The cap is also the only vowel-spread mechanism: there is no positional or vowel constraint in v1.
+- **Fill order** — confirmed (client). Seed first, then the remaining cells in uniformly random order, each drawn from the capped, renormalized weights.
+- **Letter variety** — mechanism confirmed, ranked values not. The weights are raised to a power before sampling: `p = 2 − variety` for variety < 0.5, and `p = 2 − 2·variety` otherwise. So 0.5 means the weights as listed, 1 means uniform, and 0 means squared (`@fa8fb2d` `adjustFrequencies`). Ranked season configs carry `variety` and `varietyRange` per pool entry (`FluxWrappedView.swift` `SeasonBoardConfig`, `@da5b456`), but the values are server data. Simulating at 0.5 matches the recent seasons (2.5).
+- **Best-of-N ranking metric** — confirmed. Candidates are ranked by total points summed over **distinct** words (`findWords` returns a `Set`, `@3a8e30c`; `scoreBoard`, `@1073e0a`), with minimum length 3. A word reachable by several paths counts once.
+- **Candidate count formula** — client. `N = floor(quality²)` (`@fa8fb2d` `generateBoard`), with quality in [1, 100]. The published counts are exact squares (144 = 12², 625 = 25², 81 = 9²), which fits the server using the same formula with a quality range per tier.
+- **Grid split** — confirmed per season, and it changed. Season 1 was 4x4 only; season 2 was 50/50; season 3 onward is 60/40. Sources: the in-app next-season text in `@947c3cf` (2026-02-04), and the export (season 2: 375/403; seasons 3–10: 61–64% 4x4).
+- **Tier shares** — confirmed from in-app text only. "20% of boards are very good / spam, 30% … nearly casual / random, and the remaining 50% … somewhere in the middle" (`RankedSeasonHeaderCard.swift`, `RankedHubView.swift`; `@947c3cf` for the Wrapped slide). The export records no tier, so this can't be checked per board.
+- **Seeding rate** — confirmed from in-app text. 50% of boards carry one secret seed word, and the ranked submit response returns a single `secretSeed` per game (`RankedService.swift`).
+- **Seed word selection** — confirmed (server port). A uniformly random dictionary word of the target length, rejected if any letter appears more than twice (3 on 6x6). After 100 failed draws it falls back to an unfiltered word (`@f823e21` `SeedWordGenerator.swift`, mirroring `seedWords.js`).
+- **Seed lengths** — confirmed from season 3 onward: 4x4 uses 8–11 and 5x5 uses 9–13, uniform over the range in the port (`@f823e21`, mirroring `SEASON_SEED_RANGES`). Season 2 used 8–10 and 9–12 (`@947c3cf`).
+- **Seed placement** — confirmed (client). A random self-avoiding walk: random start cell, then a uniformly random unvisited 8-neighbour at each step, restarting up to 1000 times. The seed letters are written along the walk, then the fill runs around them, respecting the cap. App text: "The word is guaranteed to appear in the board, and the rest of the letters are filled in around it."
+- **Seed timing** — confirmed (client), and **it contradicts the previous spec**. The seed word is drawn **once per board, before best-of-N**, and passed to `generateBoard(seed:)`. All N candidates share that one word, and each lays it along its own fresh random walk (`SinglePlayerHomeView.swift` → `BoggleGenerator.generateBoard`). Whether a board is seeded is therefore decided at board level, so best-of-N **cannot** select for seeded boards: exactly 50% of final boards are seeded in every tier.
+
+Still unconfirmed, and carried in the config as provisional:
 
 | Tier | Share | 4x4 candidates | 5x5 candidates |
 | --- | --- | --- | --- |
@@ -79,23 +108,65 @@ The marginal jump flattens after 6. Going from 5 to 6 letters is worth 600 point
 | Good Casual | 50% | 10–20 | 10–20 |
 | Casual | 30% | 5 | 3 |
 
-**Where N is a range, it is drawn uniformly at random per board.** For 4x4 Spam that is a uniform draw over [144, 625]. Best-of-144 and best-of-625 produce measurably different boards, so the Spam tier is a spread rather than a point, and the simulator records the realized N on every Spam board (5.3).
+The shares are confirmed (above). The candidate counts are as published and are not in any accessible code; the season pool (`boardConfigPool`: `name, boardSize, duration, minWordLength, mode, variety, varietyRange, quality, seeded, seedType`) is served at runtime by `/api/ranked/wrapped/:seasonId`. With the client formula `N = floor(q²)`, a quality range of [12, 25] gives mean N ≈ 356 rather than the 384.5 a uniform draw on [144, 625] gives. Which of the two the server does is unknown, so the uniform draw below remains provisional. Under this table, simulated board potential matches the real boards for seasons 7–10 (2.5).
 
-**Candidates in the best-of-N are ranked by total available points on the board.** Confirmed, not assumed. This is the single most consequential generation parameter, because it determines what a Spam board looks like: selecting on point mass favours boards with dense long-word clusters and heavy stem reuse, rather than boards with many distinct short words. The simulator ranks candidates the same way, and `board_norms` is built from that ranking.
+**Where N is a range, it is drawn uniformly at random per board** (provisional, see above). For 4x4 Spam that is a uniform draw over [144, 625]. Best-of-144 and best-of-625 produce measurably different boards, so the Spam tier is a spread rather than a point, and the simulator records the realized N on every Spam board (5.3).
 
-**A word contributes to total available points exactly once, however many distinct paths spell it.** Duplicate words do not score twice in play, so per-path counting would rank boards by points no player can capture, and best-of-N would select for dense repeated-letter boards on the strength of value that does not exist. This is settled and hardcoded in the potential metric, not a configurable option. It constrains the scoring metric only: the solver still enumerates and stores every distinct path per word, because reachability, cellmate and enumerability analysis all depend on paths.
+**Candidates in the best-of-N are ranked by total available points on the board, and a word contributes exactly once however many distinct paths spell it** (confirmed, above). This is the single most consequential generation parameter, because it determines what a Spam board looks like: selecting on point mass favours boards with dense long-word clusters and heavy stem reuse, rather than boards with many distinct short words. The simulator ranks candidates the same way, and `board_norms` is built from that ranking. It constrains the scoring metric only: the solver still enumerates and stores every distinct path per word, because reachability, cellmate and enumerability analysis all depend on paths.
 
-**Seeding happens before the best-of-N, not after it.** The tier is drawn first (it is what sets N, and what the 20/50/30 shares above are a distribution over), then each candidate is seeded, then the tier's best-of-N runs over already-seeded candidates. Reading "before tier selection" as "before the tier is known" would make the Spam-only restriction on the longest seed lengths unimplementable, since that rule is conditional on the tier. Each of the N candidates draws its own seed word and placement independently, rather than all N sharing one seed word with different fills — candidates are independent everywhere else and this keeps them so. A consequence worth remembering when reading simulation output: because selection happens after seeding, a selected board's potential comes partly from its seed, so seeded boards are overrepresented at the top of every best-of-N.
+**Ordering.** The tier is drawn first, since it sets N. The seed decision and the seed word are drawn once for the board. Then N candidates are generated, each placing that same word on its own walk and filling around it, and the best-of-N runs over them. The rule "longest seed only on Spam" (11 on 4x4, 13 on 5x5) is **not** in the server port. `SeedWordGenerator` draws uniformly over the full range with no tier condition, but the port states it omits "the season/ranked context", so the rule is neither confirmed nor refuted.
 
-### 2.4 Parameters that are assumptions
+### 2.4 Parameters that remain assumptions
 
-These are flagged in the config as `provisional` and are the first thing to confirm with the developer:
+These are flagged in the config as `provisional`:
 
-1. **Letter distribution.** Placeholder is English letter frequency weighted by frequency in words (not in running text), which is the sane default. Flux may use Boggle-style dice, which produce a meaningfully different distribution because dice guarantee vowel spread. If it turns out to be dice, the simulation output changes a lot and has to be rerun.
-2. **Letter variety adjustment.** The note that variety is "probably increased in casual/good casual" is modeled as a tunable bias toward distinct letters, off by default until confirmed.
-3. **Seed placement mechanism.** Assumed to be: pick a word of the target length, lay its path on the grid as a self-avoiding walk, then fill the remaining cells from the letter distribution. Whether Flux lays seeds this way is unconfirmed. The *ordering* around tier selection is not an assumption — seeding happens first, per 2.3.
+1. **Candidate counts per tier** (table in 2.3), and whether N is uniform in N or uniform in quality.
+2. **Variety per tier.** The mechanism is confirmed (2.3); the ranked values per pool entry are server data. At variety 0.5 the recent seasons fit, and real boards show slightly fewer doubled letters than the model (4.58 against 4.65 on 4x4, 9.36 against 9.52 on 5x5), which is consistent with some tiers running mildly above 0.5.
+3. **Spam-only longest seeds** (2.3).
+4. **v1 or v2 generator for ranked.** A "Board Gen V2" annealing generator exists for custom games from `@525c64b` (2026-06-12): a letter-by-letter fill with bigram affinity, a vowel target and centrality weighting, then greedy pair swaps. The v1 model already fits seasons 7–10 to within noise, which argues against ranked having switched, but it is not proof.
+5. **Seasons 1–3 and 4–6 generation.** Sparse or divergent data; see 2.5.
 
 Until these are confirmed, every number the app derives from simulation carries a `ruleset_version` and the UI shows a quiet "stats v3" marker, so you never get confused about why a word's seen percentage moved.
+
+### 2.5 Season regimes
+
+Boundaries are the first and last game in the export per season. The client repo has no generation-parameter commits after `fa8fb2d` (2025-02-25), so every season-to-season change below happened on the server. It is visible only through the in-app season text (`@947c3cf`, 2026-02-04) and through the boards themselves. "v1 fit" is the letter-marginal TVD against the v1 model with cap 2, one seed per board, and the 2.3 table (60k simulated boards), next to the 95th percentile of TVD for a same-size sample drawn from the model itself.
+
+| Season | Games (4x4/5x5) | First – last game (UTC) | Grid split | Seed lengths (4x4 / 5x5) | Median potential, real (model) | v1 fit: TVD / noise95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 3397 / 0 | 2025-11-21 – 2026-01-04 | 4x4 only | unknown | 4x4 271.5k (225.8k) | 0.015 / 0.007 — **off** |
+| 2 | 375 / 403 | 2026-01-05 – 2026-02-02 | 50/50 | 8–10 / 9–12 | 192.2k / 378.9k (225.8k / 447.3k) | 0.029 / 0.022, 0.022 / 0.013 — off |
+| 3 | 1203 / 711 | 2026-02-02 – 2026-03-02 | 60/40 | 8–11 / 9–13 | 215.6k / 393.1k | 0.017 / 0.013, 0.019 / 0.011 — off |
+| 4 | 2 / 3 | 2026-03-04 – 2026-03-10 | — | — | too few | — |
+| 5 | 0 | not in export | — | — | — | — |
+| 6 | 47 / 28 | 2026-05-26 – 2026-06-01 | 60/40 | 8–11 / 9–13 | 199.5k / — | within noise (small n) |
+| 7 | 244 / 150 | 2026-06-05 – 2026-07-05 | 60/40 | 8–11 / 9–13 | 206.3k / 428.8k | 0.026 / 0.027, 0.018 / 0.023 — **fits** |
+| 8 | 960 / 560 | 2026-07-06 – 2026-08-03 | 60/40 | 8–11 / 9–13 | 226.3k / 449.6k | 0.018 / 0.014, 0.015 / 0.012 — marginal |
+| 9 | 36 / 26 | 2026-08-03 – 2026-08-04 | 60/40 | 8–11 / 9–13 | 234.8k / — | within noise (small n) |
+| 10 | 547 / 342 | 2026-09-08 – 2026-09-18 | 60/40 | 8–11 / 9–13 | 228.1k / 442.4k | 0.018 / 0.019, 0.013 / 0.016 — **fits** |
+
+The cap (maximum multiplicity 2) holds in every season. Season 1 boards are materially richer than the model and seasons 2–3 materially poorer, so the tier table or the variety values differed there. Season 2's shorter seeds explain part of its gap, not all of it. For simulation, treat seasons 7–10 as the current regime and do not pool seasons 1–3 into `board_norms` comparisons.
+
+**Elo** is computed server-side and there is no formula in the client. From the export: every decisive game moves rating by at least ±3 in every season, so a floor exists. The largest single change grew from 19/−17 in season 1 to 22–31 in later seasons. Each season starts from a reset rating: `nextSeasonElo` is served per season, and the season 2 preview says "All tiers moved up ~400 points on average". New players are seeded from the best of 10 qualifying 4x4, 80-second, minimum-3, unseeded games (`RankedHubView.swift`). An in-sample fit (`data/ranked/elo_fit.json`) finds K ≈ 17, but the ±3 floor and the growing maxima mean it is not plain Elo with a fixed K. Treat Elo as comparable within a season only.
+
+**`wentFirst`** is not a client field; the export computes it server-side. The only matching concept in the client is the ranked role. The `maker` sees "MATCH CREATED — You'll play first", and the `taker` sees "MATCH FOUND — You'll play second" and is matched onto the maker's board. Neither side sees the other's live score. `wentFirst` most plausibly equals `role == maker`, which is consistent with the analytics prompt's reading ("sent the challenge out"), but that mapping is inferred, not read from code.
+
+**The end-of-game solution list** is computed on the client (`SolverRevealView`, `findWords`): a DFS over the client trie, distinct words of length 3 or more, against the same 279,077-word list. Missed words therefore never include the 419 removed words.
+
+### 2.6 Where the code contradicts earlier assumptions
+
+**Status (2026-09-18): items 1–4 are fixed in ruleset v3** (`config/ruleset_v3.json`: client letter
+table, 2-per-letter cap with a random-order fill, one seed per board laid by the client's random
+walk, N = floor(quality²)), and the dictionary is CSW21 − 419 removals − 55,584 words that need 3+
+of one letter (223,493 words; no such word can ever have a path under the cap). v3 pins that
+dictionary and every tool refuses any other. Phase 1 was rerun under v3: `docs/PHASE1_REPORT.md`
+Part A. v1 is kept unchanged for comparison.
+
+1. **No letter cap in FluxCore.** `core/src/generator.cpp` fills every cell independently from `letterWeights`. Real boards never have a triple; FluxCore produces one on most boards. Every Phase 1 simulation number is built on the wrong fill process.
+2. **Seed per board, not per candidate.** 2.3 previously said each of the N candidates draws its own seed word. The client draws one. The Phase 1 finding that "63–87% of winners carry a seed, rising to 86.5% at 4x4 Spam" is an artifact of the per-candidate assumption. Under the client mechanism it is exactly 50% at every tier.
+3. **Wrong base distribution.** `ruleset_v1.json` uses CSW21 word-list letter frequencies; Flux uses running-text English frequencies (2.3). The inverse fit in `ruleset_v2.json` (analytics prompt §5.1) is unnecessary. Its fitted weights (E 3.5%, H 8.1%) are the fit trying to reproduce a capped marginal with an uncapped model, so it should not be used. The v1 model with the real weights and the cap reproduces the observed marginal directly, which is the validation check §5.1 asked for.
+4. **Dictionary.** Full CSW21 against Flux's CSW21 minus 419 (2.1).
+5. **Grid split and seed lengths are season-dependent**, not fixed (2.5).
 
 ## 3. Training thesis: what actually limits a strong player
 
@@ -328,7 +399,7 @@ Two optimizations if it gets tight:
 **Per-board fields recorded during simulation**, because two generation parameters are spreads rather than points and averaging over them destroys information the curriculum needs:
 
 - **Realized N.** 4x4 Spam draws N uniformly from [144, 625] (2.3), so `board_norms` for Spam aggregates over that draw exactly as ranked does. But every per-tier statistic that feeds the curriculum — enumerability above all — is **also reported split at the quartiles of N**. If a stem's enumerability sits in the usable 2-to-6 band at N=144 and blows past it at N=625, that stem is a hunting cue on only half of Spam boards, and the curriculum has to know that rather than average it away.
-- **Seed presence and identity.** Whether the board carried a seed and which word it was. Because selection happens after seeding (2.3), seeded boards are expected to be overrepresented at the top of every best-of-N. If they dominate the Spam tier far beyond the 50% base rate, that is a real finding about what Spam boards *are*, not a generator bug.
+- **Seed presence and identity.** Whether the board carried a seed and which word it was. The seed decision and word are drawn once per board, before best-of-N (2.3), so exactly 50% of boards are seeded at every tier. A simulator that shows seeded boards overrepresented among the winners is drawing a seed per candidate, which is the bug flagged in 2.6, not a finding about Spam boards.
 
 Only words with P(appear) above about 1e-5 in any cell are retained. Expect 60k to 120k surviving words, which is the set actually worth showing a human.
 
@@ -1056,13 +1127,13 @@ Mitigations: keep `ruleset_version` on every derived number, make the pipeline a
 
 ### 16.3 Questions for the Flux developer
 
-1. Exact letter distribution or dice configuration.
-2. Whether the letter-variety adjustment on Casual and Good Casual is real.
-3. Exact Collins 21 edition and any house additions or removals.
-4. **Does re-swiping an already-found word cost time?** Not captured anywhere in this spec, and in fast play it is a real source of waste.
-5. Whether an end-of-game export of board plus found words could ever exist. Even a copyable text blob would let the trainer ingest real ranked games.
+Most of the original list is answered by the client repo (2.1–2.3): the letter distribution is a weighted table with a 2-per-letter cap, not dice; the dictionary is CSW21 minus 419 offensive words; re-swiping a found word scores nothing and costs only its time; multi-path words count once; the seed is drawn once per board, before best-of-N. What remains lives only in the server repo (`NodeJS-backend`):
 
-Two questions previously on this list have been settled and removed: multi-path words count once toward board potential, and seeding happens before tier selection. Both are specified in 2.3 and neither is configurable.
+1. The ranked `boardConfigPool` per season (`config/rankedBoardConfigs.js`): `quality` or quality range per tier, `variety`/`varietyRange` per tier, and whether the longest seed lengths are restricted to Spam. Equivalently, the `/api/ranked/wrapped/:seasonId` `seasonPreview.boardConfigPool` payload for each past season.
+2. Whether ranked ever used the v2 annealing generator (`boardLab.js`), and from when.
+3. The Elo update: K, the ±3 floor, any margin-of-victory term, and the per-season reset formula behind `nextSeasonElo`.
+4. What the export's `wentFirst` is computed from (presumably `role == maker`).
+5. Season 1–3 generation parameters, which do not fit the current regime (2.5).
 
 ### 16.4 Product risks
 

@@ -1,0 +1,158 @@
+{
+  "exports": {
+    "miningmath": {
+      "games": 9034
+    },
+    "nicole": {
+      "games": 7133
+    }
+  },
+  "sharedGames": 733,
+  "sharedByName": {
+    "miningmathExportOpponentNames": {
+      "Nicole": 709,
+      "Player_hnnf7r": 24
+    },
+    "nicoleExportOpponentNames": {
+      "MiningMath": 733
+    }
+  },
+  "exactOnAll": 733,
+  "checks": {
+    "board": 733,
+    "aWordsEqualBOpp": 733,
+    "bWordsEqualAOpp": 733,
+    "aScoreEqualBOpp": 733,
+    "bScoreEqualAOpp": 733,
+    "outcome": 733,
+    "wentFirst": 733,
+    "completedAt": 733,
+    "season": 733
+  },
+  "mismatches": [],
+  "forfeits": [
+    {
+      "createdAt": "2025-12-07 05:56:47.786000+00:00",
+      "gid_miningmath": 1285,
+      "gid_nicole": 1201
+    },
+    {
+      "createdAt": "2026-02-18 00:44:33.066000+00:00",
+      "gid_miningmath": 5254,
+      "gid_nicole": 4490
+    },
+    {
+      "createdAt": "2026-07-10 21:05:20.167000+00:00",
+      "gid_miningmath": 6714,
+      "gid_nicole": 5758
+    }
+  ],
+  "contested": 730,
+  "corruptRows": {
+    "2309": {
+      "opponent": "donq",
+      "createdAt": "2025-12-20T23:07:10.725Z",
+      "sharedGame": false,
+      "opponentWords": 69,
+      "offBoardWords": 68,
+      "bestMatchingBoard": {
+        "wordsPresent": 36,
+        "of": 69,
+        "in_miningmath": [
+          {
+            "gid": 4061,
+            "oppName": "Lasagna",
+            "createdAt": "2026-01-31 21:29:27.621000+00:00"
+          }
+        ],
+        "in_nicole": []
+      },
+      "nicoleHasGameAtThisTime": false
+    }
+  },
+  "distinctBoards": {
+    "shared": 733,
+    "miningmath": 9034,
+    "nicole": 7133,
+    "solvedTotal": 15434
+  },
+  "neverAccepted": {
+    "miningmath": {
+      "deadWords": 1275,
+      "acceptedInOther": 390,
+      "acceptedInOtherExamples": {
+        "RATOOS": 11,
+        "URBS": 9,
+        "EDILES": 7,
+        "OLEATE": 7,
+        "RETEMS": 7,
+        "SOLEIN": 6,
+        "CAREEN": 6,
+        "FEINTS": 6,
+        "TERTIA": 6,
+        "CAMEO": 6,
+        "OLEATES": 6,
+        "ANOW": 6,
+        "TEPAL": 6,
+        "VINO": 6,
+        "ELANET": 5,
+        "TALCS": 5,
+        "DORAD": 5,
+        "CLARETS": 5,
+        "TEPALS": 5,
+        "TENESI": 4,
+        "NITON": 4,
+        "TRIENE": 4,
+        "TREMAS": 4,
+        "PAREO": 4,
+        "EITHER": 4,
+        "SOLACE": 4,
+        "ETICS": 4,
+        "SIENTS": 4,
+        "OSETRA": 4,
+        "DETACH": 4
+      },
+      "deadInBoth": 559,
+      "presentInOther": 1275
+    },
+    "nicole": {
+      "deadWords": 902,
+      "acceptedInOther": 329,
+      "acceptedInOtherExamples": {
+        "CESSE": 14,
+        "UNREST": 12,
+        "ALLIS": 10,
+        "ARIDER": 9,
+        "COEDS": 9,
+        "SANTAL": 8,
+        "UNAI": 8,
+        "UNRED": 8,
+        "NEVI": 7,
+        "CREDO": 7,
+        "REROSE": 7,
+        "COTANS": 7,
+        "CERNE": 7,
+        "NASHI": 6,
+        "WIEL": 6,
+        "NAMU": 5,
+        "AGRIN": 5,
+        "UNAIS": 5,
+        "AGRO": 5,
+        "AUE": 5,
+        "DATTO": 5,
+        "NADA": 5,
+        "EGAD": 5,
+        "ASCI": 5,
+        "INLETS": 5,
+        "SNARF": 4,
+        "TURF": 4,
+        "LIGAN": 4,
+        "ACHAR": 4,
+        "MERDE": 4
+      },
+      "deadInBoth": 559,
+      "presentInOther": 902
+    },
+    "pooledDead": 2260
+  }
+}

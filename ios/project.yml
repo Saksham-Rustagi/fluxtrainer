@@ -1,0 +1,109 @@
+# Generate the Xcode project with:  cd ios && xcodegen
+# (brew install xcodegen). The .xcodeproj is generated and not committed.
+name: FluxClone
+options:
+  bundleIdPrefix: com.sakshamrustagi
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Set your (free) Apple ID team in Xcode, or here, before building to a device.
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+targets:
+  FluxClone:
+    type: application
+    platform: iOS
+    # XcodeGen writes FluxClone/Info.plist from this block; edit here, not there.
+    info:
+      path: FluxClone/Info.plist
+      properties:
+        CFBundleDisplayName: Flux Clone
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIAppFonts: [FiraSans-Bold.ttf]
+        # 120 Hz CADisplayLink on ProMotion iPhones.
+        CADisableMinimumFrameDurationOnPhone: true
+        # Documents/Exports shows in the Files app under On My iPhone.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIUserInterfaceStyle: Dark
+    sources:
+      - path: FluxClone
+        excludes:
+          - Info.plist
+      # FluxCore v3, compiled from the same sources as the simulator (spec 14.1).
+      - path: ../core/src
+        group: FluxCore
+      - path: ../tools/config_json/src/config_json.cpp
+        group: FluxCore
+      # Pinned dictionary and ruleset; the engine refuses any other pairing.
+      - path: ../data/dict/flux_capped.dawg
+        group: Resources
+        buildPhase: resources
+      - path: ../config/ruleset_v3.json
+        group: Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sakshamrustagi.fluxclone
+        PRODUCT_NAME: FluxClone
+        SWIFT_OBJC_BRIDGING_HEADER: FluxClone/Bridge/FluxClone-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/../core/include
+          - $(SRCROOT)/../tools/config_json/include
+          - $(SRCROOT)/FluxClone/Bridge
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+      configs:
+        # Generation is best-of-625 on Spam boards: keep the C++ optimized even in
+        # Debug so a device build from Xcode shows boards in well under a second.
+        Debug:
+          GCC_OPTIMIZATION_LEVEL: "2"
+  FluxCloneTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FluxCloneTests
+    dependencies:
+      - target: FluxClone
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/FluxClone.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FluxClone
+        BUNDLE_LOADER: $(TEST_HOST)
+  FluxCloneUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: FluxCloneUITests
+    dependencies:
+      - target: FluxClone
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FluxClone
+schemes:
+  FluxClone:
+    build:
+      targets:
+        FluxClone: all
+        FluxCloneTests: [test]
+        FluxCloneUITests: [test]
+    test:
+      targets:
+        - FluxCloneTests
+        - FluxCloneUITests
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -1,0 +1,3 @@
+regime	games	meanScore	winRate	freeOpportunitiesPerGame	missedFreeWordsPerGame	ceilingPtsPerGame	ceilingWinRate	affixPtsPerGame	affixWordsPerGame	affixWinRate	affixAtReliableRatePts	affixAtReliableRateWinRate	topQuartileRatePts	topQuartileRateWinRate	topQuartileRateWinModel	frontierRatePts	frontierRateWinRate	frontierRateWinModel
+current	1721	56100.9	0.554329	194.023	128.335	140160	0.997095	56237.9	42.5439	0.996514	41328.8	0.992446	7534.36	0.806508		15962	0.93434	
+all	7133	54179.9	0.556568	179.456	117.106	127100	0.997757	51167.1	38.8559	0.995654	37602.3	0.990467	6949.3	0.776952		14722.5	0.910136	

@@ -1,0 +1,12 @@
+source	side	centreOverCorner	block	index	real	v1	v2
+real	4	1.51482	centre				
+real	5	1.41731	centre				
+v1 sim	4	1.34326	centre				
+v1 sim	5	1.13343	centre				
+v2 sim	4	1.50505	centre				
+v2 sim	5	1.26442	centre				
+			maxCopies	2	1	0.192833	0.36
+			maxCopies	3		0.59	0.534167
+			maxCopies	4		0.187333	0.0958333
+			maxCopies	5		0.0276667	0.0095
+			maxCopies	6		0.00216667	0.0005

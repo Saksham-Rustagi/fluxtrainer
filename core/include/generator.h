@@ -58,6 +58,10 @@ public:
         return static_cast<uint32_t>(product >> 32);
     }
 
+    // Uniform on [0, 1) with 53 bits. IEEE-exact arithmetic on fixed-width
+    // integers, so it is as reproducible across platforms as below().
+    double unit() { return static_cast<double>(next() >> 11) * 0x1.0p-53; }
+
     bool chance(uint32_t numerator, uint32_t denominator) {
         return denominator != 0 && below(denominator) < numerator;
     }
@@ -98,6 +102,24 @@ inline uint32_t simulationCellId(uint8_t side, Tier tier) {
     return static_cast<uint32_t>(side) * kTierCount + static_cast<uint32_t>(tier);
 }
 
+// The realized best-of-N for one board (spec 2.3). UniformN draws N over
+// [minN, maxN]; UniformQuality draws quality q uniformly over
+// [sqrt(minN), sqrt(maxN)] and returns floor(q^2) clamped to the range, the
+// client's N = floor(quality^2). UniformQuality always consumes one draw;
+// UniformN reproduces v1's draw exactly, including consuming none for a
+// point range.
+uint32_t drawRealizedN(const CandidateRange& range, CandidateDraw draw, Rng& rng);
+
+// Which quarter of the draw's probability mass N fell in, 0-3. Under
+// UniformQuality the quarters are equal in quality, not in N, so this is
+// what "split at the quartiles of realized N" means for a non-uniform N.
+int realizedNQuartile(const CandidateRange& range, CandidateDraw draw, uint32_t realizedN);
+
+// Does `word` fit on a board capped at `maxPerLetter` copies of each letter?
+// 0 means uncapped. A word over the cap can never be spelled, whatever the
+// board, since a path never reuses a cell.
+bool fitsLetterCap(const char* word, uint8_t len, uint8_t maxPerLetter);
+
 // Spec 5.3: the fields that have to survive the aggregation, because two
 // generation parameters are spreads rather than points and averaging over
 // them destroys information the curriculum needs.
@@ -112,13 +134,14 @@ struct GenerationRecord {
     uint32_t winningCandidate = 0;  // its index within [0, realizedN)
     uint64_t winningPoints = 0;     // SolveResult::totalPoints of the winner
 
-    bool seeded = false;      // the winning candidate carried a seed
+    bool seeded = false;      // the winning board carries a seed
     uint32_t seedWordId = 0;  // dense DAWG word ID, valid when `seeded`
     uint8_t seedLen = 0;
 
-    // Diagnostics. `seededCandidates` against realizedN is the base seed
-    // rate; comparing it to `seeded` is how the overrepresentation of seeded
-    // boards at the top of a best-of-N gets measured rather than assumed.
+    // Diagnostics. Under SeedScope::PerCandidate, `seededCandidates` against
+    // realizedN is the base seed rate, and `seeded` can exceed it because
+    // selection runs after seeding. Under PerBoard the board is seeded or not
+    // before best-of-N, so seededCandidates is 0 or every placed candidate.
     uint32_t seededCandidates = 0;
     uint32_t seedPlacementFailures = 0;
     uint32_t cheapAborts = 0;
@@ -132,7 +155,8 @@ struct GenerationRecord {
 // time, which costs one short walk and keeps this table small.
 class SeedPool {
 public:
-    void build(const Dawg& dawg, uint8_t minLen, uint8_t maxLen);
+    // maxPerLetter > 0 drops words with more copies of a letter than the cap.
+    void build(const Dawg& dawg, uint8_t minLen, uint8_t maxLen, uint8_t maxPerLetter = 0);
     void buildForRuleset(const Dawg& dawg, const RulesetConfig& config);
 
     bool hasLength(uint8_t len) const { return len < kMaxLen && !byLength_[len].empty(); }
@@ -223,12 +247,29 @@ private:
         bool placementFailed = false;
     };
 
+    // A board-level seed, drawn once before best-of-N (SeedScope::PerBoard).
+    struct BoardSeed {
+        bool seeded = false;
+        uint32_t wordId = 0;
+        uint8_t len = 0;
+        char letters[kMaxCells + 1] = {};
+    };
+
     void buildCandidate(uint8_t side, Tier tier, const GridConfig& grid, Rng& rng,
                         Candidate* out) const;
+    // PerBoard: lay the board's shared seed word on a fresh path, then fill.
+    void buildCandidateWithSeed(uint8_t side, const BoardSeed& seed, Rng& rng,
+                                Candidate* out) const;
+    bool drawSeedWord(Tier tier, const GridConfig& grid, Rng& rng, BoardSeed* out) const;
     bool placeSeed(uint8_t side, Tier tier, const GridConfig& grid, Rng& rng, Board* board,
                    uint32_t* filled, Candidate* out) const;
     bool embedWord(const char* word, uint8_t len, const BoardGeometry& geom, Rng& rng,
                    bool allowOverlap, Board* board, uint32_t* filled) const;
+    // Every cell not in `filled`, from the letter weights, honouring the
+    // ruleset's letter cap (counting what is already on the board) and fill
+    // order. With no cap and row-major order this consumes the stream exactly
+    // as v1 did, so v1 boards reproduce byte for byte.
+    void fillRemaining(const BoardGeometry& geom, uint32_t filled, Rng& rng, Board* board) const;
 
     const Dawg& dawg_;
     RulesetConfig config_;

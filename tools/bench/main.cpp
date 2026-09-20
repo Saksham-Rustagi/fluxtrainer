@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -138,6 +139,10 @@ void benchByTier(const Dawg& dawg, const std::string& configPath, size_t perCell
     if (!fluxcore::config::loadRulesetConfig(configPath, &loaded, &error)) {
         std::cerr << "error: " << error << "\n";
         return;
+    }
+    if (!fluxcore::config::enforceDictionary(loaded.config, dawg.sourceHash(), dawg.wordCount(),
+                                             "bench")) {
+        std::exit(1);
     }
 
     fluxcore::SeedPool seeds;

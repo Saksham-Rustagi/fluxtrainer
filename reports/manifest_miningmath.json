@@ -1,0 +1,105 @@
+{
+  "player": "MiningMath",
+  "generatedUtc": "2026-09-19T19:22:25Z",
+  "gitSha": "a25de3c820419392553292818bc22cddd4bb32bd",
+  "gitDirty": true,
+  "pass": 3,
+  "inputs": {
+    "ranked_data_MiningMath_part1of2.json": {
+      "sha256": "7198731ee4311e5e959ba50e2a51aca3dacb9426806c7463fbb9a643b59e892d",
+      "games": 4517,
+      "part": 1,
+      "fetchedAt": "2026-09-18T20:35:19.228Z"
+    },
+    "ranked_data_MiningMath_part2of2.json": {
+      "sha256": "9936d04048fdfec12d0be219f46a199bbc8d5fd665755c5fbe0335e3581abd7e",
+      "games": 4517,
+      "part": 2,
+      "fetchedAt": "2026-09-18T20:35:19.228Z"
+    }
+  },
+  "dictionary": {
+    "wordlist": "/Users/sakshamrustagi/Desktop/code/LetterCounter/bogwords.txt",
+    "sha256": "2bf71e793dec78dbcb190a9827544468130efd33d63cc24d925ecb645cd26d0e",
+    "dawgSha256": "4ddb9196bec15ba986863daac6637766d8fb31792adbd1f989016d9654d11815",
+    "words": 279496
+  },
+  "configs": {
+    "ruleset_v1.json": "d73841ba78863cfcec1c198c67e56638fee83a5ee2fae6c17554b9dd52bb221a",
+    "ruleset_v2.json": "f4f4894b0d6c7753ecf3abe9884a95ff90ac563f2587892ecd649e5d83d589b1",
+    "ruleset_v3.json": "92a8ad50637d99fe3b66d4543deb10ef55f0699ff73a2d92731ccbb9a36af28f"
+  },
+  "regime": {
+    "current": "seasons 7-10",
+    "games": 2865,
+    "holdout": "chronological 70/30 within seasons 7-10",
+    "train": 2005,
+    "test": 860
+  },
+  "counts": {
+    "games": 9034,
+    "finds": 1534506,
+    "solutionRows": 3810839,
+    "neverAcceptedWords": 885
+  },
+  "crossValidation": {
+    "sharedGames": 733,
+    "exactOnAll": 733,
+    "mismatches": 0
+  },
+  "figures": [
+    "s1_confounds_by_month",
+    "s1_headline_by_month",
+    "s1_headline_by_season",
+    "s1_length_mix_by_month",
+    "s1_vocabulary",
+    "s2_1_deficit_by_month",
+    "s2_1_length_by_position",
+    "s2_1_opening_by_grid",
+    "s2_1_opening_by_season",
+    "s2_1_opening_by_tier",
+    "s2_2_opening_cost",
+    "s2_2b_opening_test",
+    "s2_3_fresh_rate",
+    "s2_4_run_lengths",
+    "s2_5_length_transitions",
+    "s3_coverage",
+    "s3_heatmap",
+    "s3_missed_long_words",
+    "s3_travel",
+    "s4_0_baselines",
+    "s4_1_belief",
+    "s4_2_vocabulary_holes",
+    "s4_3_retention",
+    "s4_4_family_completion",
+    "s4_5_affix_misses",
+    "s4_6_anagram_sets",
+    "s4_7_learning_curve",
+    "s4_8_phase1_vs_real",
+    "s5_1_letters",
+    "s5_4_regimes_pooled",
+    "s5_capture_vs_potential",
+    "s5_generation",
+    "s5_potential_vs_sim",
+    "s6_marginal_value",
+    "s6_margins",
+    "s6_missed_by_opponent",
+    "s6_overlap",
+    "s6_repeat_opponents",
+    "s6_win_rate",
+    "s7_gap_before",
+    "s7_long_sessions",
+    "s7_session_position",
+    "s7_time_of_day",
+    "sa_alpha_words",
+    "sa_headroom",
+    "sd_dictionary",
+    "sh_1_paired",
+    "sh_2_opening_curves",
+    "sh_3_decomposition",
+    "sh_4_opening_vs_margin",
+    "sh_5_exclusive_words",
+    "sh_6_over_time"
+  ],
+  "reportBytes": 6305204
+}

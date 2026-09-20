@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -47,18 +48,78 @@ std::vector<std::string> loadWordList(const std::string& path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: build_dawg <word-list-path> <output-path>\n";
+    // Positional input/output, plus the two filters that turn CSW21 into the
+    // Flux dictionary (spec 2.1): --exclude drops the words Flux removed, and
+    // --max-letter-repeat drops every word needing more copies of one letter
+    // than the ruleset's letter cap allows -- such a word can never have a
+    // path on a capped board, so keeping it only inflates the word ID space.
+    std::vector<std::string> positional;
+    std::vector<std::string> excludePaths;
+    size_t maxLetterRepeat = 0;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--exclude" && i + 1 < argc) {
+            excludePaths.push_back(argv[++i]);
+        } else if (arg == "--max-letter-repeat" && i + 1 < argc) {
+            maxLetterRepeat = static_cast<size_t>(std::stoul(argv[++i]));
+        } else {
+            positional.push_back(arg);
+        }
+    }
+    if (positional.size() != 2) {
+        std::cerr << "usage: build_dawg <word-list-path> <output-path> [--exclude <word-list>]... "
+                     "[--max-letter-repeat N]\n";
         return 1;
     }
-    std::string inputPath = argv[1];
-    std::string outputPath = argv[2];
+    std::string inputPath = positional[0];
+    std::string outputPath = positional[1];
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::string> words = loadWordList(inputPath);
     if (words.empty()) {
         std::cerr << "error: no valid words loaded from " << inputPath << "\n";
         return 1;
+    }
+    const size_t loadedCount = words.size();
+
+    for (const std::string& path : excludePaths) {
+        const std::vector<std::string> excluded = loadWordList(path);
+        std::vector<std::string> kept;
+        kept.reserve(words.size());
+        std::set_difference(words.begin(), words.end(), excluded.begin(), excluded.end(),
+                            std::back_inserter(kept));
+        size_t absent = 0;
+        for (const std::string& word : excluded) {
+            if (!std::binary_search(words.begin(), words.end(), word)) ++absent;
+        }
+        std::cout << "excluded:       " << (words.size() - kept.size()) << " words listed in "
+                  << path << "\n";
+        if (absent > 0) {
+            // An exclusion that matches nothing is a sign the lists disagree
+            // on edition or spelling, which is worth failing loudly on.
+            std::cerr << "error: " << absent << " words in " << path << " are not in "
+                      << inputPath << "\n";
+            return 1;
+        }
+        words = std::move(kept);
+    }
+    const size_t afterExclude = words.size();
+
+    if (maxLetterRepeat > 0) {
+        words.erase(std::remove_if(words.begin(), words.end(),
+                                   [&](const std::string& word) {
+                                       size_t counts[26] = {};
+                                       for (char c : word) {
+                                           if (++counts[c - 'A'] > maxLetterRepeat) return true;
+                                       }
+                                       return false;
+                                   }),
+                    words.end());
+        std::cout << "letter cap:     " << (afterExclude - words.size()) << " words need more than "
+                  << maxLetterRepeat << " of one letter and were pruned\n";
+    }
+    if (loadedCount != words.size()) {
+        std::cout << "input words:    " << loadedCount << " -> " << words.size() << "\n";
     }
     auto t1 = std::chrono::steady_clock::now();
 

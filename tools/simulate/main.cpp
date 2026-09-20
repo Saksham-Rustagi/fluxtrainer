@@ -164,6 +164,10 @@ int main(int argc, char** argv) {
         std::cerr << "error: not a valid DAWG: " << dawgPath << "\n";
         return 1;
     }
+    if (!fluxcore::config::enforceDictionary(loaded.config, dawg.sourceHash(), dawg.wordCount(),
+                                             "simulate")) {
+        return 1;
+    }
 
     SeedPool seeds;
     seeds.buildForRuleset(dawg, loaded.config);

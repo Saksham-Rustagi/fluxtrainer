@@ -1,6 +1,8 @@
 #include "config_json.h"
 
 #include <cmath>
+#include <cstdio>
+#include <initializer_list>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -388,15 +390,85 @@ void parseGrid(const JsonValue& value, const std::string& path, GridConfig* grid
     }
 }
 
+void parseGeneration(const JsonValue& value, const std::string& path, RulesetConfig* config) {
+    requireObject(value, path);
+    requireKnownKeys(value, path,
+                     {"maxPerLetter", "fillOrder", "seedScope", "seedPlacement", "candidateDraw"});
+    config->maxPerLetter = static_cast<uint8_t>(
+        requireUInt(requireMember(value, "maxPerLetter", path), path + ".maxPerLetter", 0, kMaxCells));
+
+    auto choose = [&](const char* key, std::initializer_list<const char*> names) -> uint8_t {
+        const std::string& text = requireString(requireMember(value, key, path), path + "." + key);
+        uint8_t index = 0;
+        std::string allowed;
+        for (const char* name : names) {
+            if (text == name) return index;
+            allowed += (index ? ", " : "") + std::string(name);
+            ++index;
+        }
+        fail(path + "." + key, "expected one of: " + allowed);
+    };
+    config->fillOrder = static_cast<FillOrder>(choose("fillOrder", {"rowMajor", "random"}));
+    config->seedScope = static_cast<SeedScope>(choose("seedScope", {"perCandidate", "perBoard"}));
+    config->seedPlacement =
+        static_cast<SeedPlacement>(choose("seedPlacement", {"backtrackingDfs", "randomWalk"}));
+    config->candidateDraw =
+        static_cast<CandidateDraw>(choose("candidateDraw", {"uniformN", "uniformQuality"}));
+}
+
+void parseDictionary(const JsonValue& value, const std::string& path, RulesetConfig* config) {
+    requireObject(value, path);
+    requireKnownKeys(value, path, {"sourceHash", "words"});
+    const std::string& text = requireString(requireMember(value, "sourceHash", path), path + ".sourceHash");
+    if (text.size() != 18 || text[0] != '0' || text[1] != 'x') {
+        fail(path + ".sourceHash", "expected 0x followed by 16 hex digits");
+    }
+    uint64_t hash = 0;
+    for (size_t i = 2; i < text.size(); ++i) {
+        const char c = text[i];
+        uint64_t digit = 0;
+        if (c >= '0' && c <= '9') digit = static_cast<uint64_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') digit = static_cast<uint64_t>(c - 'a' + 10);
+        else fail(path + ".sourceHash", "expected lowercase hex digits");
+        hash = (hash << 4) | digit;
+    }
+    config->dictionaryPinned = true;
+    config->dictionaryHash = hash;
+    config->dictionaryWords = static_cast<uint32_t>(
+        requireUInt(requireMember(value, "words", path), path + ".words", 1, 0xFFFFFFFFull));
+}
+
 void parseTop(const JsonValue& root, const std::string& origin, LoadResult* out) {
     requireObject(root, origin);
     requireKnownKeys(root, origin,
                      {"version", "provisional", "letterWeights", "scoreTable", "solver", "seeding",
-                      "cheapScoring", "grids"});
+                      "cheapScoring", "grids", "generation", "dictionary"});
 
     RulesetConfig& config = out->config;
     config.version = static_cast<uint32_t>(
         requireUInt(requireMember(root, "version", origin), origin + ".version", 1, 0xFFFFFFFFull));
+
+    // The generation and dictionary blocks are versioned schema, not optional
+    // fields: from v3 they are required, before v3 they are forbidden. So a
+    // v1 file keeps meaning exactly what it meant when its runs were made,
+    // and a v3 file cannot silently fall back to v1 semantics by omission.
+    const bool v3 = config.version >= kFirstGenerationBlockVersion;
+    for (const char* block : {"generation", "dictionary"}) {
+        const bool present = root.find(block) != nullptr;
+        if (v3 && !present) {
+            fail(origin + "." + block, "required from ruleset version " +
+                                           std::to_string(kFirstGenerationBlockVersion));
+        }
+        if (!v3 && present) {
+            fail(origin + "." + block, "not allowed before ruleset version " +
+                                           std::to_string(kFirstGenerationBlockVersion) +
+                                           "; bump the version instead of changing an old one");
+        }
+    }
+    if (v3) {
+        parseGeneration(requireMember(root, "generation", origin), origin + ".generation", &config);
+        parseDictionary(requireMember(root, "dictionary", origin), origin + ".dictionary", &config);
+    }
 
     const JsonValue& provisional =
         requireArray(requireMember(root, "provisional", origin), origin + ".provisional");
@@ -478,6 +550,21 @@ void parseTop(const JsonValue& root, const std::string& origin, LoadResult* out)
         }
     }
     if (config.gridShareTotal() == 0) fail(origin + ".grids", "grid shares must not all be zero");
+
+    if (config.seedScope == SeedScope::PerBoard && config.extraSeedCount > 0) {
+        fail(origin + ".seeding.extraSeedCount",
+             "extra seeds are a per-candidate LetterCounter mode; seedScope perBoard lays one word");
+    }
+    if (config.maxPerLetter != 0) {
+        for (uint8_t g = 0; g < config.gridCount; ++g) {
+            const uint32_t cells = static_cast<uint32_t>(config.grids[g].side) * config.grids[g].side;
+            if (26u * config.maxPerLetter < cells) {
+                fail(origin + ".generation.maxPerLetter",
+                     "26 letters at this cap cannot fill a " + std::to_string(config.grids[g].side) +
+                         "x" + std::to_string(config.grids[g].side) + " board");
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -505,6 +592,39 @@ bool parseRulesetConfig(const char* data, size_t size, const std::string& origin
         return false;
     }
     out->config.configHash = hashConfigBytes(data, size);
+    return true;
+}
+
+bool checkDictionary(const RulesetConfig& config, uint64_t sourceHash, uint32_t words,
+                     std::string* error) {
+    if (!config.dictionaryPinned) return true;
+    if (config.dictionaryHash == sourceHash && config.dictionaryWords == words) return true;
+    if (error != nullptr) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+                      "dictionary mismatch: ruleset v%u is pinned to source hash 0x%016llx "
+                      "(%u words), but the loaded DAWG is 0x%016llx (%u words). Word IDs and "
+                      "every derived statistic would silently mean different words.",
+                      config.version, static_cast<unsigned long long>(config.dictionaryHash),
+                      config.dictionaryWords, static_cast<unsigned long long>(sourceHash), words);
+        *error = buf;
+    }
+    return false;
+}
+
+bool enforceDictionary(const RulesetConfig& config, uint64_t sourceHash, uint32_t words,
+                       const char* tool) {
+    std::string error;
+    if (!checkDictionary(config, sourceHash, words, &error)) {
+        std::fprintf(stderr, "%s: error: %s\n", tool, error.c_str());
+        return false;
+    }
+    if (!config.dictionaryPinned) {
+        std::fprintf(stderr,
+                     "%s: warning: ruleset v%u pins no dictionary, so nothing checks that this "
+                     "DAWG (0x%016llx, %u words) is the one its numbers assume\n",
+                     tool, config.version, static_cast<unsigned long long>(sourceHash), words);
+    }
     return true;
 }
 

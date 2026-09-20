@@ -1,6 +1,7 @@
 #include "generator.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace fluxcore {
 namespace {
@@ -110,6 +111,39 @@ bool randomSelfAvoidingPath(const BoardGeometry& geom, uint8_t targetLen, uint32
     return false;
 }
 
+// The client's seed placement (flux-ios BoggleGenerator.generateRandomPath):
+// a uniformly random start cell, then a uniformly random unvisited neighbour
+// at each step, restarting from scratch on a dead end. No backtracking, which
+// is why its path distribution differs from dfsRandomPath's.
+bool randomWalkPath(const BoardGeometry& geom, uint8_t targetLen, uint32_t attempts, Rng& rng,
+                    uint8_t* path) {
+    const uint8_t cells = geom.cellCount();
+    if (targetLen == 0 || targetLen > cells) return false;
+
+    for (uint32_t attempt = 0; attempt < attempts; ++attempt) {
+        uint8_t pathLen = 0;
+        uint32_t visited = 0;
+        uint8_t cell = static_cast<uint8_t>(rng.below(cells));
+        path[pathLen++] = cell;
+        visited |= 1u << cell;
+        while (pathLen < targetLen) {
+            uint8_t open[8];
+            uint8_t openCount = 0;
+            const uint8_t count = geom.neighborCount(cell);
+            const uint8_t* neighbors = geom.neighbors(cell);
+            for (uint8_t i = 0; i < count; ++i) {
+                if (!(visited & (1u << neighbors[i]))) open[openCount++] = neighbors[i];
+            }
+            if (openCount == 0) break;
+            cell = open[rng.below(openCount)];
+            path[pathLen++] = cell;
+            visited |= 1u << cell;
+        }
+        if (pathLen == targetLen) return true;
+    }
+    return false;
+}
+
 // (row, col) under the 8 dihedral symmetries of a square.
 inline void transformCoord(uint8_t transform, uint8_t side, uint8_t r, uint8_t c, uint8_t* outR,
                            uint8_t* outC) {
@@ -128,11 +162,74 @@ inline void transformCoord(uint8_t transform, uint8_t side, uint8_t r, uint8_t c
 
 }  // namespace
 
-void SeedPool::build(const Dawg& dawg, uint8_t minLen, uint8_t maxLen) {
+uint32_t drawRealizedN(const CandidateRange& range, CandidateDraw draw, Rng& rng) {
+    uint32_t n = range.minN;
+    if (draw == CandidateDraw::UniformQuality) {
+        const double low = std::sqrt(static_cast<double>(range.minN));
+        const double high = std::sqrt(static_cast<double>(range.maxN));
+        const double quality = low + (high - low) * rng.unit();
+        const double squared = quality * quality;
+        n = static_cast<uint32_t>(std::floor(squared));
+        // sqrt then square can land a hair under minN; the range is inclusive.
+        n = std::clamp(n, range.minN, range.maxN);
+    } else {
+        // Exactly v1's draw, including consuming nothing for a point range.
+        const uint32_t span = range.maxN >= range.minN ? range.maxN - range.minN + 1 : 1;
+        n = range.minN + rng.below(span);
+    }
+    return n == 0 ? 1 : n;
+}
+
+int realizedNQuartile(const CandidateRange& range, CandidateDraw draw, uint32_t realizedN) {
+    if (range.maxN <= range.minN) return 0;
+    double position = 0;
+    if (draw == CandidateDraw::UniformQuality) {
+        const double low = std::sqrt(static_cast<double>(range.minN));
+        const double high = std::sqrt(static_cast<double>(range.maxN));
+        // N = floor(q^2), so q lies in [sqrt(N), sqrt(N+1)); its midpoint
+        // places N within the quality range without favouring either end.
+        const double q = 0.5 * (std::sqrt(static_cast<double>(realizedN)) +
+                                std::sqrt(static_cast<double>(realizedN) + 1.0));
+        position = (q - low) / (high - low);
+    } else {
+        const double span = static_cast<double>(range.maxN - range.minN + 1);
+        position = static_cast<double>(realizedN - range.minN) / span;
+    }
+    return std::clamp(static_cast<int>(position * 4.0), 0, 3);
+}
+
+bool fitsLetterCap(const char* word, uint8_t len, uint8_t maxPerLetter) {
+    if (maxPerLetter == 0) return true;
+    uint8_t counts[26] = {};
+    for (uint8_t i = 0; i < len; ++i) {
+        const int c = word[i] - 'A';
+        if (c < 0 || c >= 26) return false;
+        if (++counts[c] > maxPerLetter) return false;
+    }
+    return true;
+}
+
+void SeedPool::build(const Dawg& dawg, uint8_t minLen, uint8_t maxLen, uint8_t maxPerLetter) {
     for (uint8_t i = 0; i < kMaxLen; ++i) byLength_[i].clear();
     if (!dawg.isLoaded() || minLen == 0 || maxLen < minLen || maxLen >= kMaxLen) return;
     if (!dawg.hasEdges(dawg.rootState())) return;
     enumerateWords(dawg, dawg.rootState(), 0u, 0u, minLen, maxLen, byLength_);
+    if (maxPerLetter == 0) return;
+
+    // Spec 2.3: a seed word over the letter cap can never be drawn, since
+    // laying it would put too many copies of a letter on the board (the
+    // client's isValidSeedWord, maxRepeats 2).
+    char letters[kMaxLen + 1];
+    for (uint8_t len = minLen; len <= maxLen; ++len) {
+        std::vector<uint32_t>& ids = byLength_[len];
+        ids.erase(std::remove_if(ids.begin(), ids.end(),
+                                 [&](uint32_t id) {
+                                     const size_t n = dawg.wordForId(id, letters, sizeof(letters));
+                                     return !fitsLetterCap(letters, static_cast<uint8_t>(n),
+                                                           maxPerLetter);
+                                 }),
+                  ids.end());
+    }
 }
 
 void SeedPool::buildForRuleset(const Dawg& dawg, const RulesetConfig& config) {
@@ -151,7 +248,7 @@ void SeedPool::buildForRuleset(const Dawg& dawg, const RulesetConfig& config) {
         for (uint8_t i = 0; i < kMaxLen; ++i) byLength_[i].clear();
         return;
     }
-    build(dawg, minLen, maxLen);
+    build(dawg, minLen, maxLen, config.maxPerLetter);
 }
 
 size_t SeedPool::totalWords() const {
@@ -250,13 +347,20 @@ bool Generator::generate(uint8_t side, Tier tier, uint32_t boardIndex, uint64_t 
     const GridConfig* grid = config_.grid(side);
     if (grid == nullptr || side == 0 || side > kMaxSide) return false;
 
-    const uint64_t boardSeed = deriveBoardSeed(rootSeed, simulationCellId(side, tier), boardIndex);
-    Rng boardRng(boardSeed);
+    const uint64_t streamSeed = deriveBoardSeed(rootSeed, simulationCellId(side, tier), boardIndex);
+    Rng boardRng(streamSeed);
 
     const CandidateRange& range = grid->candidates[static_cast<uint8_t>(tier)];
-    const uint32_t span = range.maxN >= range.minN ? range.maxN - range.minN + 1 : 1;
-    uint32_t realizedN = range.minN + boardRng.below(span);
-    if (realizedN == 0) realizedN = 1;
+    const uint32_t realizedN = drawRealizedN(range, config_.candidateDraw, boardRng);
+
+    // Spec 2.3 (v3): the seed decision and the seed word belong to the board,
+    // drawn once before best-of-N; every candidate lays that same word on its
+    // own path. Under PerCandidate (v1/v2) each candidate rolls its own.
+    const bool perBoard = config_.seedScope == SeedScope::PerBoard;
+    BoardSeed boardSeed;
+    if (perBoard && boardRng.chance(config_.seedProbabilityPerMille, 1000)) {
+        drawSeedWord(tier, *grid, boardRng, &boardSeed);
+    }
 
     const BoardGeometry& geom = solver_.geometry(side);
 
@@ -273,12 +377,19 @@ bool Generator::generate(uint8_t side, Tier tier, uint32_t boardIndex, uint64_t 
         // construction therefore consumes exactly the same randomness however
         // the candidate is scored, so switching the cheap scorer on can only
         // change which candidate wins, never what the candidates are.
-        Rng candidateRng(splitmix64(boardSeed ^ (0x632BE59BD9B4E019ull * (i + 1))));
+        Rng candidateRng(splitmix64(streamSeed ^ (0x632BE59BD9B4E019ull * (i + 1))));
 
         Candidate candidate;
-        buildCandidate(side, tier, *grid, candidateRng, &candidate);
+        if (perBoard) {
+            buildCandidateWithSeed(side, boardSeed, candidateRng, &candidate);
+        } else {
+            buildCandidate(side, tier, *grid, candidateRng, &candidate);
+        }
         if (candidate.seeded) ++seededCandidates;
         if (candidate.placementFailed) ++placementFailures;
+        // The client skips a candidate whose seed would not place (generateBoard
+        // catches the throw and continues); it does not fall back to unseeded.
+        if (perBoard && candidate.placementFailed) continue;
 
         uint64_t points = 0;
         bool aborted = false;
@@ -299,6 +410,18 @@ bool Generator::generate(uint8_t side, Tier tier, uint32_t boardIndex, uint64_t 
         }
     }
 
+    if (!haveBest) {
+        // Every candidate's seed failed to place -- possible only if the seed
+        // length cannot be walked on this grid at all. Fall back to one
+        // unseeded candidate rather than returning an empty board.
+        Rng fallbackRng(splitmix64(streamSeed ^ 0xD6E8FEB86659FD93ull));
+        best.board = Board{};
+        best.board.side = side;
+        fillRemaining(geom, 0u, fallbackRng, &best.board);
+        solver_.solve(best.board, SolveMode::Count, &scratch_);
+        bestPoints = scratch_.totalPoints;
+    }
+
     *outBoard = best.board;
 
     GenerationRecord& record = *outRecord;
@@ -307,7 +430,7 @@ bool Generator::generate(uint8_t side, Tier tier, uint32_t boardIndex, uint64_t 
     record.tier = tier;
     record.boardIndex = boardIndex;
     record.rootSeed = rootSeed;
-    record.boardSeed = boardSeed;
+    record.boardSeed = streamSeed;
     record.realizedN = realizedN;
     record.winningCandidate = bestIndex;
     record.winningPoints = bestPoints;
@@ -332,14 +455,103 @@ void Generator::buildCandidate(uint8_t side, Tier tier, const GridConfig& grid, 
     if (rng.chance(config_.seedProbabilityPerMille, 1000)) {
         placeSeed(side, tier, grid, rng, &board, &filled, out);
     }
+    fillRemaining(solver_.geometry(side), filled, rng, &board);
+}
 
+void Generator::buildCandidateWithSeed(uint8_t side, const BoardSeed& seed, Rng& rng,
+                                       Candidate* out) const {
+    Board& board = out->board;
+    board = Board{};
+    board.side = side;
     const BoardGeometry& geom = solver_.geometry(side);
-    const uint8_t cells = geom.cellCount();
-    for (uint8_t c = 0; c < cells; ++c) {
-        if (filled & (1u << c)) continue;
-        board.letters[c] =
-            static_cast<uint8_t>(rng.pickWeighted(config_.letterWeights, 26, letterWeightTotal_));
+
+    uint32_t filled = 0;
+    if (seed.seeded) {
+        if (!embedWord(seed.letters, seed.len, geom, rng, false, &board, &filled)) {
+            out->placementFailed = true;
+            return;
+        }
+        out->seeded = true;
+        out->seedWordId = seed.wordId;
+        out->seedLen = seed.len;
     }
+    fillRemaining(geom, filled, rng, &board);
+}
+
+void Generator::fillRemaining(const BoardGeometry& geom, uint32_t filled, Rng& rng,
+                              Board* board) const {
+    const uint8_t cells = geom.cellCount();
+    const uint8_t cap = config_.maxPerLetter;
+
+    if (cap == 0 && config_.fillOrder == FillOrder::RowMajor) {
+        for (uint8_t c = 0; c < cells; ++c) {
+            if (filled & (1u << c)) continue;
+            board->letters[c] = static_cast<uint8_t>(
+                rng.pickWeighted(config_.letterWeights, 26, letterWeightTotal_));
+        }
+        return;
+    }
+
+    uint8_t order[kMaxCells];
+    uint8_t remaining = 0;
+    for (uint8_t c = 0; c < cells; ++c) {
+        if (!(filled & (1u << c))) order[remaining++] = c;
+    }
+    if (config_.fillOrder == FillOrder::Random) {
+        for (uint8_t i = remaining; i > 1; --i) {
+            const uint32_t j = rng.below(i);
+            std::swap(order[i - 1], order[j]);
+        }
+    }
+
+    // Letters already on the board (the seed) count toward the cap.
+    uint8_t counts[26] = {};
+    for (uint8_t c = 0; c < cells; ++c) {
+        if (filled & (1u << c)) ++counts[board->letters[c]];
+    }
+    uint32_t weights[26];
+    uint32_t total = 0;
+    for (uint8_t l = 0; l < 26; ++l) {
+        weights[l] = (cap != 0 && counts[l] >= cap) ? 0u : config_.letterWeights[l];
+        total += weights[l];
+    }
+
+    for (uint8_t k = 0; k < remaining; ++k) {
+        // A capped letter's weight is zeroed, so the draw renormalizes over
+        // the letters still available -- the client's positionOptions filter.
+        const uint8_t letter = static_cast<uint8_t>(rng.pickWeighted(weights, 26, total));
+        board->letters[order[k]] = letter;
+        if (cap != 0 && ++counts[letter] >= cap) {
+            total -= weights[letter];
+            weights[letter] = 0;
+        }
+    }
+}
+
+bool Generator::drawSeedWord(Tier tier, const GridConfig& grid, Rng& rng, BoardSeed* out) const {
+    uint32_t weights[kMaxSeedLengths] = {};
+    uint32_t total = 0;
+    for (uint8_t i = 0; i < grid.seedLengthCount; ++i) {
+        const SeedLengthOption& option = grid.seedLengths[i];
+        if (option.spamOnly && tier != Tier::Spam) continue;
+        if (!seeds_.hasLength(option.length)) continue;
+        weights[i] = option.weight;
+        total += option.weight;
+    }
+    if (total == 0) return false;
+
+    const uint32_t choice = rng.pickWeighted(weights, grid.seedLengthCount, total);
+    const uint8_t length = grid.seedLengths[choice].length;
+    const std::vector<uint32_t>& pool = seeds_.idsOfLength(length);
+    if (pool.empty()) return false;
+
+    const uint32_t wordId = pool[rng.below(static_cast<uint32_t>(pool.size()))];
+    const size_t written = dawg_.wordForId(wordId, out->letters, sizeof(out->letters));
+    if (written != length) return false;
+    out->seeded = true;
+    out->wordId = wordId;
+    out->len = length;
+    return true;
 }
 
 bool Generator::placeSeed(uint8_t side, Tier tier, const GridConfig& grid, Rng& rng, Board* board,
@@ -396,7 +608,11 @@ bool Generator::embedWord(const char* word, uint8_t len, const BoardGeometry& ge
 
     uint8_t path[kMaxCells];
     for (uint32_t attempt = 0; attempt < config_.seedPlacementAttempts; ++attempt) {
-        if (!randomSelfAvoidingPath(geom, len, config_.seedPathAttempts, rng, path)) continue;
+        const bool placed =
+            config_.seedPlacement == SeedPlacement::RandomWalk
+                ? randomWalkPath(geom, len, config_.seedPathAttempts, rng, path)
+                : randomSelfAvoidingPath(geom, len, config_.seedPathAttempts, rng, path);
+        if (!placed) continue;
 
         bool ok = true;
         for (uint8_t i = 0; i < len; ++i) {
@@ -490,13 +706,29 @@ bool Generator::generateConstrained(uint8_t side, Tier tier, const char* target,
         return false;
     }
 
+    // Under a letter cap a target over the cap can never be spelled, so no
+    // amount of attempts produces a board; say so instead of burning the budget.
+    if (!fitsLetterCap(target, targetLen, config_.maxPerLetter)) {
+        stats.exhausted = true;
+        if (outStats) *outStats = stats;
+        return false;
+    }
+
     const uint64_t boardSeed = deriveBoardSeed(rootSeed, simulationCellId(side, tier), boardIndex);
     Rng boardRng(boardSeed);
 
     const CandidateRange& range = grid->candidates[static_cast<uint8_t>(tier)];
-    const uint32_t span = range.maxN >= range.minN ? range.maxN - range.minN + 1 : 1;
-    uint32_t realizedN = range.minN + boardRng.below(span);
-    if (realizedN == 0) realizedN = 1;
+    const uint32_t realizedN = drawRealizedN(range, config_.candidateDraw, boardRng);
+
+    // Same seed semantics as generate(): under PerBoard the seed word is drawn
+    // once for the board. It is dropped for a candidate where it would push a
+    // letter past the cap alongside the target -- the target is the point of
+    // a constrained board, the secret seed is not.
+    const bool perBoard = config_.seedScope == SeedScope::PerBoard;
+    BoardSeed sharedSeed;
+    if (perBoard && boardRng.chance(config_.seedProbabilityPerMille, 1000)) {
+        drawSeedWord(tier, *grid, boardRng, &sharedSeed);
+    }
 
     const BoardGeometry& geom = solver_.geometry(side);
 
@@ -522,14 +754,22 @@ bool Generator::generateConstrained(uint8_t side, Tier tier, const char* target,
         // normally -- 11.1 step 6 runs the tier's ordinary best-of-N on top,
         // and a Spam board that dropped its seed would fall out of the tier's
         // own norm band by construction rather than by chance.
-        if (rng.chance(config_.seedProbabilityPerMille, 1000)) {
+        if (perBoard) {
+            if (sharedSeed.seeded) {
+                char combined[2 * kMaxCells + 2];
+                std::copy(target, target + targetLen, combined);
+                std::copy(sharedSeed.letters, sharedSeed.letters + sharedSeed.len,
+                          combined + targetLen);
+                if (fitsLetterCap(combined, static_cast<uint8_t>(targetLen + sharedSeed.len),
+                                  config_.maxPerLetter)) {
+                    embedWord(sharedSeed.letters, sharedSeed.len, geom, rng, false,
+                              &candidate.board, &filled);
+                }
+            }
+        } else if (rng.chance(config_.seedProbabilityPerMille, 1000)) {
             placeSeed(side, tier, *grid, rng, &candidate.board, &filled, &candidate);
         }
-        for (uint8_t c = 0; c < geom.cellCount(); ++c) {
-            if (filled & (1u << c)) continue;
-            candidate.board.letters[c] =
-                static_cast<uint8_t>(rng.pickWeighted(config_.letterWeights, 26, letterWeightTotal_));
-        }
+        fillRemaining(geom, filled, rng, &candidate.board);
 
         solver_.solve(candidate.board, SolveMode::Count, &scratch_);
         ++stats.solves;

@@ -1,0 +1,98 @@
+{
+  "_about": "FluxCore ruleset v3: the generator as the Flux client implements it (spec 2.3, read from flux-ios). Replaces v1 for every new number; v1 stays as-is so the two regimes remain comparable, and v2 (the inverse-fitted weights) is superseded -- its fit was an artifact of running without the letter cap. Derived artifacts record the FNV-1a hash of this file's raw bytes. Keys beginning with '_' are comments.",
+  "version": 3,
+  "provisional": [
+    "grids.tiers.minCandidates",
+    "grids.tiers.maxCandidates",
+    "generation.candidateDraw",
+    "seedLengths.spamOnly",
+    "seedLengths.weight"
+  ],
+  "_provisional": "Server-side settings the client cannot show (spec 2.4): the per-tier candidate counts, how N is drawn inside them, whether the longest seed length is Spam-only, and the seed-length weights (the client port draws uniformly). Everything else in this file is confirmed from client code and checked against the 9,034 real boards.",
+
+  "_letterWeights": "Spec 2.3, confirmed: the client's letterFrequencies table (flux-ios@fa8fb2d BoardUtils.swift), restated as the server's LETTER_FREQ in @525c64b LabBoardGenerator.swift. Standard English running-text frequency, x100 so the integers carry the table exactly (sums to 9,999). A weighted distribution, not dice. The client's variety adjustment raises these to a power; at variety 0.5 the power is 1, which is what this file encodes.",
+  "letterWeights": {
+    "A": 812, "B": 149, "C": 271, "D": 432, "E": 1202, "F": 230, "G": 203,
+    "H": 592, "I": 731, "J": 10,  "K": 69,  "L": 398, "M": 261, "N": 695,
+    "O": 768, "P": 182, "Q": 11,  "R": 602, "S": 628, "T": 910, "U": 288,
+    "V": 111, "W": 209, "X": 17,  "Y": 211, "Z": 7
+  },
+
+  "_generation": "Spec 2.3, confirmed from flux-ios BoggleGenerator.swift (@fa8fb2d) and SinglePlayerHomeView.swift. maxPerLetter 2: a hard cap during the fill -- a letter at 2 copies drops out and the rest renormalize -- and no seed word over the cap is ever drawn; all 9,034 real boards have a maximum letter count of exactly 2. fillOrder random: the client fills the remaining cells in uniformly random order. seedScope perBoard: one seed decision and one seed word per board, drawn before best-of-N, shared by every candidate. seedPlacement randomWalk: the client's generateRandomPath. candidateDraw uniformQuality: the client computes N = floor(quality^2), and the published counts are squares (144 = 12^2, 625 = 25^2, 81 = 9^2), so quality is the uniform variable and N is not uniform. Which variable the server draws uniformly is not visible; this is the provisional reading.",
+  "generation": {
+    "maxPerLetter": 2,
+    "fillOrder": "random",
+    "seedScope": "perBoard",
+    "seedPlacement": "randomWalk",
+    "candidateDraw": "uniformQuality"
+  },
+
+  "_dictionary": "Spec 2.1: CSW21 (279,496) minus the 419 words Flux removed (data/flux_removed_words.txt) = 279,077, the client's word_list.json exactly; then minus the 55,584 words that need 3+ copies of one letter and so can never have a path under maxPerLetter 2 = 223,493. Built with: build_dawg bogwords.txt flux_capped.dawg --exclude data/flux_removed_words.txt --max-letter-repeat 2. Every tool refuses any other DAWG.",
+  "dictionary": {
+    "sourceHash": "0xfa4bad1daff9c8d6",
+    "words": 223493
+  },
+
+  "_scoreTable": "Spec 2.2, confirmed (flux-ios@3a8e30c; all 18,068 real player scores reproduce from it). n >= 6 is 400(n-3) + 200.",
+  "scoreTable": {
+    "3": 100, "4": 400, "5": 800, "6": 1400, "7": 1800, "8": 2200, "9": 2600,
+    "10": 3000, "11": 3400, "12": 3800, "13": 4200, "14": 4600, "15": 5000,
+    "16": 5400, "17": 5800, "18": 6200, "19": 6600, "20": 7000, "21": 7400,
+    "22": 7800, "23": 8200, "24": 8600, "25": 9000
+  },
+  "solver": {
+    "maxPathsPerWord": 64,
+    "minWordLen": 3
+  },
+
+  "_seeding": "Spec 2.3: 50% of boards carry one secret seed. pathAttempts is the client's walk restart budget (maxAttempts 1000); placementAttempts is 1 because the client calls generateRandomPath once and, with the seed laid first on an empty board, a found path always fits.",
+  "seeding": {
+    "probabilityPerMille": 500,
+    "extraSeedCount": 0,
+    "allowSeedOverlap": false,
+    "pathAttempts": 1000,
+    "placementAttempts": 1
+  },
+
+  "_cheapScoring": "Off, as in v1. The v1 agreement measurement (99.90% at 1.48x) was made on uncapped boards and would have to be re-measured before turning it on here.",
+  "cheapScoring": {
+    "enabled": false,
+    "minStartCells": 8,
+    "marginPerMille": 2500
+  },
+
+  "_grids": "Spec 2.3 / 2.5: the current regime (seasons 3+) is 60/40, tiers 20/50/30 (confirmed from in-app text), seed lengths 8-11 on 4x4 and 9-13 on 5x5 (confirmed from the server port). Candidate counts as published; unconfirmed. The longest length stays Spam-only as in v1 so that only the confirmed corrections separate v1 from v3; the port draws uniformly over the whole range, which is still open (spec 2.4).",
+  "grids": [
+    {
+      "side": 4,
+      "share": 60,
+      "tiers": {
+        "spam": {"share": 20, "minCandidates": 144, "maxCandidates": 625},
+        "goodCasual": {"share": 50, "minCandidates": 10, "maxCandidates": 20},
+        "casual": {"share": 30, "minCandidates": 5, "maxCandidates": 5}
+      },
+      "seedLengths": [
+        {"length": 8, "weight": 1, "spamOnly": false},
+        {"length": 9, "weight": 1, "spamOnly": false},
+        {"length": 10, "weight": 1, "spamOnly": false},
+        {"length": 11, "weight": 1, "spamOnly": true}
+      ]
+    },
+    {
+      "side": 5,
+      "share": 40,
+      "tiers": {
+        "spam": {"share": 20, "minCandidates": 81, "maxCandidates": 81},
+        "goodCasual": {"share": 50, "minCandidates": 10, "maxCandidates": 20},
+        "casual": {"share": 30, "minCandidates": 3, "maxCandidates": 3}
+      },
+      "seedLengths": [
+        {"length": 9, "weight": 1, "spamOnly": false},
+        {"length": 10, "weight": 1, "spamOnly": false},
+        {"length": 11, "weight": 1, "spamOnly": false},
+        {"length": 12, "weight": 1, "spamOnly": false},
+        {"length": 13, "weight": 1, "spamOnly": true}
+      ]
+    }
+  ]
+}

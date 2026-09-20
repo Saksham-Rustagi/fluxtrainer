@@ -75,6 +75,10 @@ int main(int argc, char** argv) {
         std::cerr << "error: not a valid DAWG\n";
         return 1;
     }
+    if (!fluxcore::config::enforceDictionary(loaded.config, dawg.sourceHash(), dawg.wordCount(),
+                                             "genprobe")) {
+        return 1;
+    }
 
     SeedPool seeds;
     seeds.buildForRuleset(dawg, loaded.config);
@@ -82,12 +86,22 @@ int main(int argc, char** argv) {
 
     // Target stems: mid-length words, which is the band 7.5.1 says survives as
     // a teaching unit (-LLERS, -NTERS, -EATER, -ANTED).
+    // Under a letter cap, a word over the cap is not a hard target but an
+    // impossible one; counting it as infeasible would charge the generator
+    // for the dictionary. (The v3 dictionary is already pruned of them.)
     std::vector<std::string> targets;
     char buf[64];
+    uint32_t overCap = 0;
     for (uint32_t id = 0; id < dawg.wordCount() && targets.size() < 512; id += 523) {
         const size_t len = dawg.wordForId(id, buf, sizeof(buf));
-        if (len >= 5 && len <= 6) targets.emplace_back(buf, len);
+        if (len < 5 || len > 6) continue;
+        if (!fluxcore::fitsLetterCap(buf, static_cast<uint8_t>(len), loaded.config.maxPerLetter)) {
+            ++overCap;
+            continue;
+        }
+        targets.emplace_back(buf, len);
     }
+    if (overCap > 0) std::printf("  skipped %u targets over the letter cap\n", overCap);
     if (targets.empty()) { std::cerr << "error: no target words found\n"; return 1; }
 
     std::printf("constrained generation cost probe (spec 11.1)\n");

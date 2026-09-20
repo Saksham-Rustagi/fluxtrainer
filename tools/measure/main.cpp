@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -121,6 +122,9 @@ struct CellTallies {
     uint64_t reachableExtensions = 0;
     uint64_t distinctFreeWords = 0;  // distinct extension words reachable, per board
     uint64_t boardsWithStems = 0;
+    // Spec 15 gate, per board: expected free words a player collects when
+    // they find F of the board's n findable words (see gateExtraWords).
+    double gateExtra = 0;
 
     // M2
     std::vector<uint64_t> anagramTrials, anagramHits;    // by word length
@@ -194,6 +198,7 @@ struct CellTallies {
         reachableExtensions += other.reachableExtensions;
         distinctFreeWords += other.distinctFreeWords;
         boardsWithStems += other.boardsWithStems;
+        gateExtra += other.gateExtra;
         for (size_t i = 0; i < anagramTrials.size(); ++i) {
             anagramTrials[i] += other.anagramTrials[i];
             anagramHits[i] += other.anagramHits[i];
@@ -245,6 +250,30 @@ bool stemHasPath(const Board& board, const fluxcore::BoardGeometry& geom, const 
     return false;
 }
 
+// log C(a, b), for the hypergeometric terms below.
+double logChoose(double a, double b) {
+    if (b < 0 || b > a) return -INFINITY;
+    return std::lgamma(a + 1) - std::lgamma(b + 1) - std::lgamma(a - b + 1);
+}
+
+// Spec 15 asks whether reachability "implies 2 extra words a game rather than
+// 10 or more". Reachability per stem is an availability number; this turns it
+// into words per game under one explicit model: the player finds F of the
+// board's n findable words, chosen uniformly at random. A free word w with k
+// distinct findable stems that reach it is collected for free when w itself
+// was NOT found but at least one of its stems was:
+//   P = C(n-1, F)/C(n, F) - C(n-1-k, F)/C(n, F).
+// Uniform finding is a simplification in a known direction: real players find
+// short, common words -- the stems -- more readily than long extensions, which
+// raises P(stem found) and P(extension missed) alike, so this undercounts.
+double gateExtraWords(double n, double found, double k) {
+    if (found >= n) return 0.0;
+    const double all = logChoose(n, found);
+    const double missed = std::exp(logChoose(n - 1, found) - all);
+    const double missedWithStems = std::exp(logChoose(n - 1 - k, found) - all);
+    return missed - missedWithStems;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -254,6 +283,8 @@ int main(int argc, char** argv) {
     uint32_t stemBudget = 3000;
     uint32_t curatedPerLen = 2000;
     uint32_t curatedTight = 500;
+    std::string m1Sample = "alpha";
+    double gateFound = 100;  // spec 3.1: roughly 100 words entered in 80 seconds
     unsigned threads = std::thread::hardware_concurrency();
     if (threads == 0) threads = 1;
 
@@ -274,15 +305,22 @@ int main(int argc, char** argv) {
         else if (arg == "--curated-tight")
             curatedTight = static_cast<uint32_t>(std::stoul(next("--curated-tight")));
         else if (arg == "--threads") threads = static_cast<unsigned>(std::stoul(next("--threads")));
+        else if (arg == "--m1-sample") m1Sample = next("--m1-sample");
+        else if (arg == "--gate-found") gateFound = std::stod(next("--gate-found"));
         else {
             std::cerr << "usage: measure --config <f> --dawg <f> --out <dir> "
                          "[--boards-per-cell N] [--stems N] [--curated-per-len N] "
-                         "[--curated-tight N] [--threads T] [--seed S]\n";
+                         "[--curated-tight N] [--m1-sample alpha|all] [--gate-found F] [--threads T] "
+                         "[--seed S]\n";
             return 1;
         }
     }
     if (configPath.empty() || dawgPath.empty() || outDir.empty()) {
         std::cerr << "error: --config, --dawg and --out are required\n";
+        return 1;
+    }
+    if (m1Sample != "alpha" && m1Sample != "all") {
+        std::cerr << "error: --m1-sample is alpha or all\n";
         return 1;
     }
 
@@ -298,6 +336,10 @@ int main(int argc, char** argv) {
     Dawg dawg;
     if (!dawg.loadFromMemory(dawgBytes.data(), dawgBytes.size())) {
         std::cerr << "error: not a valid DAWG\n";
+        return 1;
+    }
+    if (!fluxcore::config::enforceDictionary(loaded.config, dawg.sourceHash(), dawg.wordCount(),
+                                             "measure")) {
         return 1;
     }
 
@@ -335,14 +377,22 @@ int main(int argc, char** argv) {
         affixNames.push_back(std::string(affix.letters, affix.len) + "-");
     }
 
-    // --- M1 candidate stems: bounded, stratified by length ------------------
+    // --- M1 candidate stems -------------------------------------------------
+    // `alpha` is the Phase 1 sample: the first ~stemBudget/6 words of each
+    // length 3-8 in dictionary order, which is a heavily early-alphabet set
+    // (the 4-letter slice ends in the B's). Kept as the default so old and new
+    // numbers are the same metric. `all` takes every word of length 3-8 that
+    // has an additive extension, so nothing depends on where the alphabet
+    // happens to put a stem.
+    const bool m1All = m1Sample == "all";
     std::vector<M1Stem> m1Stems;
     std::vector<uint32_t> m1SlotOf(dawg.wordCount(), 0xFFFFFFFFu);
     {
         std::vector<uint32_t> perLen(fluxcore::kMaxCells + 1, 0);
-        const uint32_t perLenCap = stemBudget / 6 + 1;
+        const uint32_t perLenCap = m1All ? 0xFFFFFFFFu : stemBudget / 6 + 1;
+        const size_t budget = m1All ? dawg.wordCount() : stemBudget;
         char stemBuf[64], wordBuf[64];
-        for (uint32_t id = 0; id < dawg.wordCount() && m1Stems.size() < stemBudget; ++id) {
+        for (uint32_t id = 0; id < dawg.wordCount() && m1Stems.size() < budget; ++id) {
             const size_t stemLen = dawg.wordForId(id, stemBuf, sizeof(stemBuf));
             if (stemLen < 3 || stemLen > 8) continue;
             if (perLen[stemLen] >= perLenCap) continue;
@@ -602,6 +652,19 @@ int main(int argc, char** argv) {
                 }
 
                 std::sort(freeWords.begin(), freeWords.end());
+                // Before deduplicating, a free word's multiplicity is the
+                // number of (stem, extension) hits that reach it -- its k in
+                // gateExtraWords. Only meaningful when every stem is in the
+                // sample (--m1-sample all); under alpha k is truncated.
+                {
+                    const double n = static_cast<double>(result.wordCount());
+                    for (size_t a = 0; a < freeWords.size();) {
+                        size_t b = a;
+                        while (b < freeWords.size() && freeWords[b] == freeWords[a]) ++b;
+                        tally.gateExtra += gateExtraWords(n, gateFound, static_cast<double>(b - a));
+                        a = b;
+                    }
+                }
                 freeWords.erase(std::unique(freeWords.begin(), freeWords.end()), freeWords.end());
                 tally.distinctFreeWords += freeWords.size();
                 ++tally.boardsWithStems;
@@ -649,12 +712,14 @@ int main(int argc, char** argv) {
                 uint8_t letterCounts[26] = {};
                 for (uint8_t c = 0; c < board.cellCount(); ++c) ++letterCounts[board.letters[c]];
 
-                int quartile = 0;
-                if (range && range->maxN > range->minN) {
-                    const uint32_t span = range->maxN - range->minN + 1;
-                    const uint32_t offset = record.realizedN - range->minN;
-                    quartile = static_cast<int>(std::min<uint32_t>(3, offset * 4 / span));
-                }
+                // Quarters of the draw's probability mass. Under v1's uniform
+                // N that is the same as quarters of the N range; under v3's
+                // uniform quality it is not, and equal-N quarters would hold
+                // very different numbers of boards.
+                const int quartile =
+                    range ? fluxcore::realizedNQuartile(*range, loaded.config.candidateDraw,
+                                                        record.realizedN)
+                          : 0;
 
                 for (size_t sample = 0; sample < kSampleCount; ++sample) {
                     CellTallies::M3Tally& m3 = tally.m3[sample];
@@ -771,10 +836,34 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The M1 headline numbers, as a file: Phase 1 printed these to stderr
+    // only, so the report's gate table could not be regenerated from its runs.
+    {
+        std::ofstream m1(outDir + "/m1_headline.tsv");
+        m1 << "grid\ttier\tboards\tstemInstances\treachableExtensions\textPerFoundStem"
+              "\tfoundWordsPerBoard\tdistinctFreePerBoard\tfreeFraction\tgateFound"
+              "\tgateExtraPerBoard\n";
+        for (size_t c = 0; c < cellResults.size(); ++c) {
+            const CellTallies& ct = cellResults[c];
+            const double boards = static_cast<double>(ct.boardsWithStems);
+            m1 << static_cast<int>(cells[c].first) << "x" << static_cast<int>(cells[c].first) << '\t'
+               << tierName(cells[c].second) << '\t' << ct.boardsWithStems << '\t'
+               << ct.m1StemInstances << '\t' << ct.reachableExtensions << '\t'
+               << (ct.m1StemInstances ? static_cast<double>(ct.reachableExtensions) /
+                                            static_cast<double>(ct.m1StemInstances)
+                                      : 0.0)
+               << '\t' << ct.foundWords / boards << '\t' << ct.distinctFreeWords / boards << '\t'
+               << (ct.foundWords ? static_cast<double>(ct.distinctFreeWords) /
+                                       static_cast<double>(ct.foundWords)
+                                 : 0.0)
+               << '\t' << gateFound << '\t' << ct.gateExtra / boards << '\n';
+        }
+    }
+
     // ---- headline numbers to stderr ---------------------------------------
     std::fprintf(stderr, "\n==== M1 reachability ====\n");
-    std::fprintf(stderr, "  %-16s %11s %11s %13s %13s\n", "cell", "ext/stem",
-                 "freeWords/bd", "foundWords/bd", "freeFraction");
+    std::fprintf(stderr, "  %-16s %11s %11s %13s %13s %13s\n", "cell", "ext/stem",
+                 "freeWords/bd", "foundWords/bd", "freeFraction", "gateExtra/bd");
     double weightedExtra = 0, weightedBoards = 0;
     for (size_t c = 0; c < cellResults.size(); ++c) {
         const CellTallies& t = cellResults[c];
@@ -802,16 +891,20 @@ int main(int argc, char** argv) {
                                          : 0.0;
         (void)perPath;
         (void)perBoard;
-        std::fprintf(stderr, "  %-16s %11.2f %11.1f %13.1f %12.1f%%\n", cell, perFound,
+        const double gatePerBoard =
+            t.boardsWithStems ? t.gateExtra / static_cast<double>(t.boardsWithStems) : 0.0;
+        std::fprintf(stderr, "  %-16s %11.2f %11.1f %13.1f %12.1f%% %13.2f\n", cell, perFound,
                      freePerBoard, foundPerBoard,
-                     foundPerBoard ? 100.0 * freePerBoard / foundPerBoard : 0.0);
+                     foundPerBoard ? 100.0 * freePerBoard / foundPerBoard : 0.0, gatePerBoard);
         weightedExtra += perFound;
         weightedBoards += 1;
     }
     std::fprintf(stderr,
                  "  mean reachable additive extensions per found stem: %.2f\n"
+                 "  gateExtra/bd: expected free words collected by a player who finds %.0f of\n"
+                 "  the board's words uniformly at random (meaningful under --m1-sample all)\n"
                  "  (spec 15 gate: does this imply ~2 extra words a game, or 10+?)\n",
-                 weightedBoards ? weightedExtra / weightedBoards : 0.0);
+                 weightedBoards ? weightedExtra / weightedBoards : 0.0, gateFound);
 
     // M3, broad against curated, same boards. 7.5.1 predicts the 4-to-6 band
     // survives; the broad sample said only 3-letter stems reach it. If that
@@ -872,6 +965,8 @@ int main(int argc, char** argv) {
             boardsPerCell);
     }
     manifest.extra.emplace_back("m1Stems", std::to_string(m1Stems.size()));
+    manifest.extra.emplace_back("m1Sample", m1Sample);
+    manifest.extra.emplace_back("gateFound", std::to_string(gateFound));
     manifest.extra.emplace_back("m3StemsBroad", std::to_string(m3Stems[kBroad].size()));
     manifest.extra.emplace_back("m3StemsCurated", std::to_string(m3Stems[kCurated].size()));
     manifest.extra.emplace_back("m3StemsCuratedTight", std::to_string(m3Stems[kCuratedTight].size()));

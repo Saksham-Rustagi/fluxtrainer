@@ -1,0 +1,30 @@
+metric	vs	gap	lo	hi
+familyCompletion	peerOwnGames	0.568113		
+familyCompletion	strong	-0.0641195	-0.0722109	-0.0563155
+familyCompletion	topQuartile	-0.0180761	-0.0240292	-0.011749
+familyCompletion	field	-0.0110077	-0.0148854	-0.00807157
+familyCompletion	frontier	-0.0465172	-0.0485016	-0.0448367
+affixTake	peerOwnGames	0.460714		
+affixTake	strong	-0.0917351	-0.100088	-0.0813049
+affixTake	topQuartile	-0.0349074	-0.0421867	-0.0270986
+affixTake	field	-0.0200038	-0.0236599	-0.0162806
+affixTake	frontier	-0.0826285	-0.0848121	-0.0805798
+freeExtensionTake	peerOwnGames	0.340598		
+freeExtensionTake	strong	-0.0826771	-0.0921778	-0.0729241
+freeExtensionTake	topQuartile	-0.0339045	-0.0403938	-0.026219
+freeExtensionTake	field	-0.0147575	-0.0179581	-0.0118882
+freeExtensionTake	frontier	-0.0841283	-0.0862268	-0.0824085
+anagramCompletion	peerOwnGames	0.496079		
+anagramCompletion	strong	0.01349	0.00694122	0.0205359
+anagramCompletion	topQuartile	0.0159324	0.0102654	0.0212441
+anagramCompletion	field	0.0338102	0.031202	0.0363104
+anagramCompletion	frontier	-0.025277	-0.0267142	-0.0236881
+cellmateTake	peerOwnGames	0.319369		
+cellmateTake	strong	0.0197483	0.00405807	0.0354799
+cellmateTake	topQuartile	0.0247883	0.01237	0.0369134
+cellmateTake	field	0.0617661	0.0554599	0.068247
+cellmateTake	frontier	-0.0364499	-0.0393187	-0.0338722
+dropTerminalTake	peerOwnGames	0.731176		
+dropTerminalTake	strong	0.132765	0.110303	0.157016
+dropTerminalTake	topQuartile	0.112913	0.0984488	0.132497
+dropTerminalTake	field	0.0923379	0.0852909	0.0995283

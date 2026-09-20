@@ -36,5 +36,21 @@ bool parseRulesetConfig(const char* data, size_t size, const std::string& origin
 
 bool loadRulesetConfig(const std::string& path, LoadResult* out, std::string* error);
 
+// From this ruleset version on, the file carries `generation` and
+// `dictionary` blocks; before it, both are forbidden (see parseTop).
+constexpr uint32_t kFirstGenerationBlockVersion = 3;
+
+// Hard gate for every tool that loads a DAWG next to a ruleset: a pinned
+// ruleset (v3+) refuses any dictionary but its own, because word IDs and
+// every stats, family and solution table keyed on them change with it
+// (spec 5.1). Unpinned (v1/v2) rulesets pass; the caller should warn.
+bool checkDictionary(const RulesetConfig& config, uint64_t sourceHash, uint32_t words,
+                     std::string* error);
+
+// checkDictionary for a command-line tool: prints the mismatch as an error
+// and returns false, or prints a warning when the ruleset pins nothing.
+bool enforceDictionary(const RulesetConfig& config, uint64_t sourceHash, uint32_t words,
+                       const char* tool);
+
 }  // namespace config
 }  // namespace fluxcore

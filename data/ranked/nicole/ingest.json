@@ -1,0 +1,36 @@
+{
+  "parts": [
+    {
+      "username": "Nicole",
+      "totalGames": 7133,
+      "wins": 3970,
+      "losses": 3130,
+      "fetchedAt": "2026-09-19T18:12:51.823Z",
+      "part": 1,
+      "partsTotal": 2,
+      "gamesInThisPart": 3567,
+      "file": "ranked_data_Nicole_part1of2.json",
+      "sha256": "5281bcdeddd9d26645fae6d2d47cee37f06378aa5d6ed46c36d7c5ef6a41e61b"
+    },
+    {
+      "username": "Nicole",
+      "totalGames": 7133,
+      "wins": 3970,
+      "losses": 3130,
+      "fetchedAt": "2026-09-19T18:12:51.823Z",
+      "part": 2,
+      "partsTotal": 2,
+      "gamesInThisPart": 3566,
+      "file": "ranked_data_Nicole_part2of2.json",
+      "sha256": "0519d4a879f4aad88a1b60d9e08e2a2e25076f504906f2e2ab82790d64435a53"
+    }
+  ],
+  "rowsRead": 7133,
+  "overlapRowsDropped": 0,
+  "games": 7133,
+  "finds": 1308190,
+  "solutionRows": 2990592,
+  "boardsSolvedThisRun": 0,
+  "dawgSha256": "4ddb9196bec15ba986863daac6637766d8fb31792adbd1f989016d9654d11815",
+  "configSha256": "d73841ba78863cfcec1c198c67e56638fee83a5ee2fae6c17554b9dd52bb221a"
+}

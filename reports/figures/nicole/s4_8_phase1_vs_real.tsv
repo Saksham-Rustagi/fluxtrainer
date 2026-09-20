@@ -1,0 +1,65 @@
+len	pPresent	pTakenGivenFoundAndPresent	pTakenOpp	pairs	block	grid	tier	stemLen	curated	stems	membersPresent	membersFound	membersPresentIfStemFound	membersFoundIfStemFound	index	available	found
+3	0.7715	0.3818	0.312	51818	m2												
+4	0.5216	0.3983	0.3317	86051	m2												
+5	0.3304	0.4096	0.3524	54267	m2												
+6	0.203	0.3818	0.3508	12063	m2												
+7	0.1179	0.3722	0.3381	1499	m2												
+8	0.0687	0.3457	0.234	81	m2												
+9	0.0494	0	0.5	4	m2												
+10	0.0246	0	0	0	m2												
+11	0	0	0	0	m2												
+12	0	0	0	0	m2												
+13	0	0	0	0	m2												
+					m3	4x4	casual	3	True	1951	2.63147	1.00051	3.26491	1.51668			
+					m3	4x4	casual	4	False	1072	0.379664	0.107276	0.506849	0.284932			
+					m3	4x4	casual	4	True	1143	1.0315	0.360455	1.24626	0.597338			
+					m3	4x4	casual	5	False	825	0.175758	0.0424242	0.207627	0.131356			
+					m3	4x4	casual	5	True	281	0.430605	0.142349	0.513043	0.269565			
+					m3	4x4	casual	6	False	375	0.0853333	0.0106667	0.126761	0.056338			
+					m3	4x4	casual	6	True	52	0.307692	0.0384615	0.333333	0.0833333			
+					m3	4x4	casual	7	False	110	0.145455	0.00909091	0.0769231	0.0769231			
+					m3	4x4	casual	7	True	12	0.25	0	0.25	0			
+					m3	4x4	goodCasual	3	False	22	0	0	0	0			
+					m3	4x4	goodCasual	3	True	72585	5.36552	1.47937	6.65312	2.55127			
+					m3	4x4	goodCasual	4	False	43854	0.667123	0.13684	0.953609	0.511083			
+					m3	4x4	goodCasual	4	True	63214	2.02427	0.586278	2.54936	1.18719			
+					m3	4x4	goodCasual	5	False	57992	0.380311	0.0814595	0.499347	0.305285			
+					m3	4x4	goodCasual	5	True	23395	1.00291	0.274161	1.18531	0.598465			
+					m3	4x4	goodCasual	6	False	36392	0.24096	0.0356397	0.264548	0.168916			
+					m3	4x4	goodCasual	6	True	6473	0.656573	0.150471	0.727723	0.413641			
+					m3	4x4	goodCasual	7	False	15344	0.14768	0.0129041	0.138395	0.095315			
+					m3	4x4	goodCasual	7	True	1414	0.510608	0.0509194	0.461255	0.217712			
+					m3	4x4	spam	3	True	2442	8.88043	1.65438	11.6912	3.64468			
+					m3	4x4	spam	4	False	1479	0.92833	0.116295	1.68817	0.709677			
+					m3	4x4	spam	4	True	2887	2.99792	0.614825	4.11715	1.74616			
+					m3	4x4	spam	5	False	2768	0.538656	0.0914017	0.868597	0.494432			
+					m3	4x4	spam	5	True	1361	1.46216	0.346069	1.93539	1.04775			
+					m3	4x4	spam	6	False	2211	0.313433	0.0438716	0.376147	0.272171			
+					m3	4x4	spam	6	True	526	0.942966	0.249049	1.17391	0.834783			
+					m3	4x4	spam	7	False	1201	0.197336	0.0158201	0.164286	0.121429			
+					m3	4x4	spam	7	True	139	0.647482	0.165468	0.71875	0.53125			
+					m3	5x5	casual	3	False	1	0	0	0	0			
+					m3	5x5	casual	3	True	506	2.87549	0.612648	3.68557	1.21649			
+					m3	5x5	casual	4	False	287	0.466899	0.0731707	0.540984	0.229508			
+					m3	5x5	casual	4	True	283	1.38869	0.272085	1.58947	0.621053			
+					m3	5x5	casual	5	False	294	0.22449	0.0408163	0.342105	0.263158			
+					m3	5x5	casual	5	True	84	0.821429	0.142857	0.7	0.5			
+					m3	5x5	casual	6	False	156	0.108974	0.00641026	0.166667	0.0555556			
+					m3	5x5	casual	6	True	13	0.615385	0	0	0			
+					m3	5x5	casual	7	False	46	0.0869565	0	0	0			
+					m3	5x5	casual	7	True	7	0.142857	0	0	0			
+					m3	5x5	goodCasual	3	False	40	0	0	0	0			
+					m3	5x5	goodCasual	3	True	85769	6.07565	1.01559	8.58886	2.48175			
+					m3	5x5	goodCasual	4	False	57251	0.733629	0.0840509	1.17449	0.55453			
+					m3	5x5	goodCasual	4	True	71377	2.44136	0.446054	3.36255	1.26161			
+					m3	5x5	goodCasual	5	False	74990	0.413015	0.0514869	0.58201	0.31487			
+					m3	5x5	goodCasual	5	True	27710	1.28683	0.215807	1.61435	0.667635			
+					m3	5x5	goodCasual	6	False	52339	0.265118	0.0244942	0.319069	0.190864			
+					m3	5x5	goodCasual	6	True	8821	0.88312	0.128443	1.01497	0.489222			
+					m3	5x5	goodCasual	7	False	25688	0.175724	0.00782467	0.173464	0.0887971			
+					m3	5x5	goodCasual	7	True	2407	0.659327	0.0531782	0.647239	0.315951			
+					m1										4x4_casual	1.78064	0.843789
+					m1										4x4_goodCasual	2.92492	1.22723
+					m1										4x4_spam	4.10211	1.52668
+					m1										5x5_casual	2.16047	0.767442
+					m1										5x5_goodCasual	3.67172	1.20719

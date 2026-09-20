@@ -14,8 +14,19 @@ target_link_libraries(test_generator PRIVATE fluxcore dawg_builder Threads::Thre
 add_executable(test_affix test_affix.cpp)
 target_link_libraries(test_affix PRIVATE fluxcore dawg_builder lexicon)
 
-add_test(NAME test_dawg COMMAND test_dawg)
-add_test(NAME test_solver COMMAND test_solver)
-add_test(NAME test_oracle COMMAND test_oracle)
-add_test(NAME test_generator COMMAND test_generator)
-add_test(NAME test_affix COMMAND test_affix)
+# The full-dictionary halves of these suites need CSW21, which is not in the
+# repo (licensing, spec 16.1). Point FLUX_WORDLIST at bogwords.txt to run them;
+# without it ctest runs only the small synthetic-dictionary checks.
+set(FLUX_WORDLIST "" CACHE FILEPATH "CSW21 word list for the full-dictionary tests")
+foreach(suite test_dawg test_solver test_oracle test_generator test_affix)
+  if(FLUX_WORDLIST)
+    add_test(NAME ${suite} COMMAND ${suite} ${FLUX_WORDLIST})
+  else()
+    add_test(NAME ${suite} COMMAND ${suite})
+  endif()
+endforeach()
+
+add_executable(test_ruleset test_ruleset.cpp)
+target_link_libraries(test_ruleset PRIVATE fluxcore config_json)
+target_compile_definitions(test_ruleset PRIVATE FLUX_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+add_test(NAME test_ruleset COMMAND test_ruleset)

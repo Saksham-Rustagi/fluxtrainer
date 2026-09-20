@@ -1,0 +1,25 @@
+sizeB	mean	lo	hi	n	clusters	block	peer	stemB	tier
+2	0.791606	0.788582	0.794838	72550	1716	sizeB			
+3	0.620072	0.615852	0.623892	50199	1713	sizeB			
+4-5	0.543528	0.539548	0.547404	86794	1715	sizeB			
+6-9	0.433024	0.428318	0.437574	81462	1643	sizeB			
+10+	0.329632	0.320847	0.336539	40342	1077	sizeB			
+2						sizeB_peer	0.785289		
+3						sizeB_peer	0.632455		
+4-5						sizeB_peer	0.554739		
+6-9						sizeB_peer	0.44909		
+10+						sizeB_peer	0.356577		
+	0.523866	0.519161	0.528455	250314	1716	stemB		4	
+	0.64146	0.636468	0.647194	64930	1706	stemB		5	
+	0.712373	0.701352	0.721462	13966	1350	stemB		6	
+	0.737482	0.714992	0.757115	2137	457	stemB		7	
+						stemB_peer	0.535174	4	
+						stemB_peer	0.649268	5	
+						stemB_peer	0.74166	6	
+						stemB_peer	0.771996	7	
+	0.650417	0.622649	0.676918	2277	37	tier			casual
+	0.556064	0.551981	0.5603	320688	1652	tier			goodCasual
+	0.537103	0.516502	0.55454	8382	27	tier			spam
+						tier_peer	0.665733		casual
+						tier_peer	0.569079		goodCasual
+						tier_peer	0.535617		spam

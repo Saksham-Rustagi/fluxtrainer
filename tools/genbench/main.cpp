@@ -159,6 +159,10 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "error: %s is not a valid DAWG\n", argv[2]);
         return 1;
     }
+    if (!fluxcore::config::enforceDictionary(loaded.config, dawg.sourceHash(), dawg.wordCount(),
+                                             "genbench")) {
+        return 1;
+    }
 
     const double scale = argc > 3 ? std::atof(argv[3]) : 1.0;
 

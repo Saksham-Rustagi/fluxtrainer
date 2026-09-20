@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -121,6 +122,34 @@ void setLetterWeightsFromWords(const std::vector<std::string>& words, RulesetCon
     for (uint8_t i = 0; i < 26; ++i) {
         if (config->letterWeights[i] == 0) config->letterWeights[i] = 1;
     }
+}
+
+// Spec 2.3 as read from the client (ruleset v3): the running-text letter
+// table, a 2-per-letter cap with a random-order fill, one seed per board laid
+// by the client's random walk, and N = floor(quality^2).
+RulesetConfig clientConfig() {
+    RulesetConfig config = specConfig();
+    config.version = 3;
+    const uint32_t table[26] = {812, 149, 271, 432, 1202, 230, 203, 592, 731, 10, 69, 398, 261,
+                                695, 768, 182, 11,  602, 628, 910,  288, 111, 209, 17,  211, 7};
+    for (uint8_t i = 0; i < 26; ++i) config.letterWeights[i] = table[i];
+    config.maxPerLetter = 2;
+    config.fillOrder = fluxcore::FillOrder::Random;
+    config.seedScope = fluxcore::SeedScope::PerBoard;
+    config.seedPlacement = fluxcore::SeedPlacement::RandomWalk;
+    config.candidateDraw = fluxcore::CandidateDraw::UniformQuality;
+    config.seedPathAttempts = 1000;
+    config.seedPlacementAttempts = 1;
+    return config;
+}
+
+uint8_t maxLetterCount(const Board& board) {
+    uint8_t counts[26] = {};
+    uint8_t most = 0;
+    for (uint8_t c = 0; c < board.cellCount(); ++c) {
+        most = std::max<uint8_t>(most, ++counts[board.letters[c]]);
+    }
+    return most;
 }
 
 std::vector<std::string> smallWordList() {
@@ -526,6 +555,257 @@ void testWinnerIsTheMaximum(const Dawg& dawg, const SeedPool& seeds, const Rules
     }
 }
 
+// ---------------------------------------------------------------------------
+// Ruleset v3: the corrections read from the client (spec 2.3, 2.6).
+// ---------------------------------------------------------------------------
+
+// (a) The fill samples the letter table. Uncapped and unseeded, best-of-1, the
+// cell marginal must match the table; with the cap on, no letter exceeds 2
+// and the common letters are pushed down relative to the table, which is the
+// shape the real boards show (E 12.0% in the table, about 10.8% on 4x4).
+void testLetterTableFill(const Dawg& dawg, const SeedPool& seeds) {
+    RulesetConfig config = clientConfig();
+    config.seedProbabilityPerMille = 0;
+    for (uint8_t g = 0; g < config.gridCount; ++g) {
+        for (uint8_t t = 0; t < fluxcore::kTierCount; ++t) config.grids[g].candidates[t] = {1, 1};
+    }
+    RulesetConfig uncapped = config;
+    uncapped.maxPerLetter = 0;
+
+    const uint32_t boards = 3000;
+    for (int capped = 0; capped < 2; ++capped) {
+        Generator generator(dawg, capped ? config : uncapped, seeds);
+        Board board;
+        GenerationRecord record;
+        uint64_t counts[26] = {};
+        uint64_t cells = 0;
+        uint8_t worst = 0;
+        for (uint32_t i = 0; i < boards; ++i) {
+            CHECK(generator.generate(4, Tier::Casual, i, kRootSeed, &board, &record));
+            for (uint8_t c = 0; c < 16; ++c) ++counts[board.letters[c]];
+            cells += 16;
+            worst = std::max(worst, maxLetterCount(board));
+        }
+        const double total = config.letterWeightTotal();
+        for (uint8_t l = 0; l < 26; ++l) {
+            const double p = config.letterWeights[l] / total;
+            const double observed = static_cast<double>(counts[l]) / cells;
+            const double sd = std::sqrt(p * (1 - p) / cells);
+            if (!capped) CHECK(std::fabs(observed - p) < 5 * sd + 1e-4);
+        }
+        if (capped) {
+            CHECK(worst == 2);
+            const double e = static_cast<double>(counts['E' - 'A']) / cells;
+            CHECK(e > 0.095 && e < 0.115);  // table says 0.120; the cap bites
+        } else {
+            CHECK(worst >= 3);  // the old fill violates the cap routinely
+        }
+    }
+}
+
+// (b) The cap holds on every board, every tier, seeded or not; binds hard
+// when one letter dominates (exactly 2 copies, the rest renormalized); and
+// with a random fill order the capped letter does not pile into the first
+// cells. Seed words and constrained targets over the cap are unusable.
+void testLetterCap(const Dawg& dawg, const RulesetConfig& base) {
+    RulesetConfig config = base;
+    config.grids[0].candidates[static_cast<uint8_t>(Tier::Spam)] = {30, 40};
+    SeedPool seeds;
+    seeds.buildForRuleset(dawg, config);
+
+    char buf[64];
+    for (uint8_t len = 8; len <= 13; ++len) {
+        for (uint32_t id : seeds.idsOfLength(len)) {
+            const size_t n = dawg.wordForId(id, buf, sizeof(buf));
+            CHECK(fluxcore::fitsLetterCap(buf, static_cast<uint8_t>(n), 2));
+        }
+    }
+
+    Generator generator(dawg, config, seeds);
+    Board board;
+    GenerationRecord record;
+    uint32_t seeded = 0, boards = 0;
+    for (uint8_t side : {4, 5}) {
+        for (Tier tier : {Tier::Casual, Tier::GoodCasual, Tier::Spam}) {
+            for (uint32_t i = 0; i < 120; ++i) {
+                CHECK(generator.generate(side, tier, i, kRootSeed, &board, &record));
+                CHECK(maxLetterCount(board) <= 2);
+                ++boards;
+                if (record.seeded) ++seeded;
+            }
+        }
+    }
+    CHECK(seeded > boards / 4);  // the cap was exercised on seeded boards too
+
+    // One letter at ~all the weight: the cap is the only thing stopping a
+    // board of E's, so every board has exactly two, and they land anywhere.
+    RulesetConfig dominant = config;
+    dominant.seedProbabilityPerMille = 0;
+    for (uint8_t l = 0; l < 26; ++l) dominant.letterWeights[l] = 1;
+    dominant.letterWeights['E' - 'A'] = 1000000;
+    dominant.grids[0].candidates[static_cast<uint8_t>(Tier::Casual)] = {1, 1};
+    Generator dominantGen(dawg, dominant, seeds);
+    uint32_t cellsWithE[16] = {};
+    for (uint32_t i = 0; i < 400; ++i) {
+        CHECK(dominantGen.generate(4, Tier::Casual, i, kRootSeed, &board, &record));
+        uint32_t es = 0;
+        for (uint8_t c = 0; c < 16; ++c) {
+            if (board.letters[c] == 'E' - 'A') { ++es; ++cellsWithE[c]; }
+        }
+        CHECK(es == 2);
+    }
+    // Row-major would put both E's in cells 0 and 1 every time.
+    uint32_t cellsUsed = 0;
+    for (uint32_t n : cellsWithE) cellsUsed += n > 0 ? 1 : 0;
+    CHECK(cellsUsed == 16);
+    CHECK(cellsWithE[0] < 120 && cellsWithE[15] > 20);
+
+    // A target needing three S's can never be laid under the cap.
+    Generator::ConstrainedStats stats;
+    CHECK(!generator.generateConstrained(4, Tier::Casual, "ASSESS", 6, 0, kRootSeed, 0, ~0ull,
+                                         1000, &board, &record, &stats));
+    CHECK(stats.candidatesBuilt == 0);
+    CHECK(fluxcore::fitsLetterCap("ASSES", 5, 2) == false);
+    CHECK(fluxcore::fitsLetterCap("TESTED", 6, 2) == true);
+    CHECK(fluxcore::fitsLetterCap("TESTEES", 7, 0) == true);  // 0 = uncapped
+}
+
+// (c) One seed per board. The seed decision and word are drawn before
+// best-of-N, so: every candidate of a seeded board carries the seed; the
+// word does not depend on N or on which candidate wins; and the winners'
+// seed rate stays at 50% however large N is -- which is exactly what the
+// per-candidate draw (v1) got wrong.
+void testSeedPerBoard(const Dawg& dawg, const RulesetConfig& base) {
+    RulesetConfig config = base;
+    config.grids[0].candidates[static_cast<uint8_t>(Tier::Spam)] = {60, 60};
+    config.grids[0].candidates[static_cast<uint8_t>(Tier::GoodCasual)] = {12, 12};
+    config.candidateDraw = fluxcore::CandidateDraw::UniformQuality;  // one draw even for a point
+    SeedPool seeds;
+    seeds.buildForRuleset(dawg, config);
+
+    RulesetConfig single = config;
+    single.grids[0].candidates[static_cast<uint8_t>(Tier::GoodCasual)] = {1, 1};
+
+    Generator generator(dawg, config, seeds);
+    Generator singleGen(dawg, single, seeds);
+    Solver solver(dawg, config.scores, config.solver);
+    SolveResult result;
+    Board board, first;
+    GenerationRecord record, firstRecord;
+
+    for (uint32_t i = 0; i < 60; ++i) {
+        CHECK(generator.generate(4, Tier::GoodCasual, i, kRootSeed, &board, &record));
+        CHECK(singleGen.generate(4, Tier::GoodCasual, i, kRootSeed, &first, &firstRecord));
+        CHECK(record.seedPlacementFailures == 0);
+        // Seeded boards: all N candidates carried it. Unseeded: none did.
+        CHECK(record.seededCandidates == (record.seeded ? record.realizedN : 0u));
+        // Best-of-12 and best-of-1 agree on the seed: it was drawn first.
+        CHECK(record.seeded == firstRecord.seeded);
+        if (record.seeded) {
+            CHECK(record.seedWordId == firstRecord.seedWordId);
+            solver.solve(board, SolveMode::Count, &result);
+            CHECK(std::find(result.wordIds.begin(), result.wordIds.end(), record.seedWordId) !=
+                  result.wordIds.end());
+        }
+    }
+
+    // Winner seed rate at best-of-60: 50% under PerBoard. Under PerCandidate
+    // the winners are seeded far more often, because selection runs after
+    // seeding -- the Phase 1 "63-87% of winners" artifact.
+    RulesetConfig perCandidate = config;
+    perCandidate.seedScope = fluxcore::SeedScope::PerCandidate;
+    Generator perCandidateGen(dawg, perCandidate, seeds);
+    const uint32_t boards = 300;
+    uint32_t seededBoard = 0, seededCandidate = 0;
+    for (uint32_t i = 0; i < boards; ++i) {
+        CHECK(generator.generate(4, Tier::Spam, i, kRootSeed, &board, &record));
+        if (record.seeded) ++seededBoard;
+        CHECK(perCandidateGen.generate(4, Tier::Spam, i, kRootSeed, &board, &record));
+        if (record.seeded) ++seededCandidate;
+    }
+    const double boardRate = static_cast<double>(seededBoard) / boards;
+    const double candidateRate = static_cast<double>(seededCandidate) / boards;
+    std::fprintf(stderr, "  winners seeded at best-of-60: perBoard %.3f, perCandidate %.3f\n",
+                 boardRate, candidateRate);
+    CHECK(boardRate > 0.41 && boardRate < 0.59);  // 50% +- 3 sd
+    CHECK(candidateRate > 0.65);
+}
+
+// N = floor(quality^2), quality uniform. Not uniform in N: mean ~355.8 rather
+// than 384.5 on [144, 625], and ~58.6% of boards at N <= 384 rather than 48.6%.
+void testQualityDraw() {
+    using fluxcore::CandidateDraw;
+    Rng rng(777);
+    const fluxcore::CandidateRange spam{144, 625};
+    const uint32_t draws = 200000;
+    double sum = 0;
+    uint32_t low = 0, minSeen = 1000, maxSeen = 0;
+    uint32_t quartiles[4] = {};
+    for (uint32_t i = 0; i < draws; ++i) {
+        const uint32_t n = fluxcore::drawRealizedN(spam, CandidateDraw::UniformQuality, rng);
+        CHECK(n >= 144 && n <= 625);
+        sum += n;
+        if (n <= 384) ++low;
+        minSeen = std::min(minSeen, n);
+        maxSeen = std::max(maxSeen, n);
+        ++quartiles[fluxcore::realizedNQuartile(spam, CandidateDraw::UniformQuality, n)];
+    }
+    const double mean = sum / draws;
+    std::fprintf(stderr, "  quality draw on [144, 625]: mean N %.2f, P(N <= 384) %.4f\n", mean,
+                 static_cast<double>(low) / draws);
+    // E[floor(q^2)] = E[q^2] - ~0.5 = (25^3 - 12^3) / 39 - 0.5 = 355.83.
+    CHECK(mean > 354.8 && mean < 356.9);
+    CHECK(static_cast<double>(low) / draws > 0.580 && static_cast<double>(low) / draws < 0.593);
+    CHECK(minSeen == 144 && maxSeen >= 623);
+    // Quartiles are equal in probability, not equal in N.
+    for (uint32_t q : quartiles) CHECK(q > draws / 4 - 1500 && q < draws / 4 + 1500);
+
+    // Point ranges come back exactly, and the small ranges stay in bounds.
+    for (uint32_t i = 0; i < 1000; ++i) {
+        CHECK(fluxcore::drawRealizedN({81, 81}, CandidateDraw::UniformQuality, rng) == 81);
+        CHECK(fluxcore::drawRealizedN({5, 5}, CandidateDraw::UniformQuality, rng) == 5);
+        CHECK(fluxcore::drawRealizedN({3, 3}, CandidateDraw::UniformQuality, rng) == 3);
+        const uint32_t gc = fluxcore::drawRealizedN({10, 20}, CandidateDraw::UniformQuality, rng);
+        CHECK(gc >= 10 && gc <= 20);
+    }
+    // UniformN is v1's draw and stays uniform.
+    double uniformSum = 0;
+    for (uint32_t i = 0; i < draws; ++i) {
+        uniformSum += fluxcore::drawRealizedN(spam, CandidateDraw::UniformN, rng);
+    }
+    CHECK(uniformSum / draws > 383.5 && uniformSum / draws < 385.5);
+}
+
+// The client's walk has to produce a valid self-avoiding path of the exact
+// length, on both grids, for every seed length the rulesets use.
+void testRandomWalkPlacement(const Dawg& dawg, const RulesetConfig& base) {
+    RulesetConfig config = base;
+    for (uint8_t g = 0; g < config.gridCount; ++g) {
+        for (uint8_t t = 0; t < fluxcore::kTierCount; ++t) config.grids[g].candidates[t] = {1, 1};
+    }
+    config.seedProbabilityPerMille = 1000;
+    SeedPool seeds;
+    seeds.buildForRuleset(dawg, config);
+    Generator generator(dawg, config, seeds);
+    Solver solver(dawg, config.scores, config.solver);
+    SolveResult result;
+    Board board;
+    GenerationRecord record;
+    std::set<uint8_t> lengths;
+    for (uint8_t side : {4, 5}) {
+        for (uint32_t i = 0; i < 200; ++i) {
+            CHECK(generator.generate(side, Tier::Spam, i, kRootSeed, &board, &record));
+            CHECK(record.seeded);
+            CHECK(record.seedPlacementFailures == 0);
+            lengths.insert(record.seedLen);
+            solver.solve(board, SolveMode::Count, &result);
+            CHECK(std::find(result.wordIds.begin(), result.wordIds.end(), record.seedWordId) !=
+                  result.wordIds.end());
+        }
+    }
+    CHECK(lengths.count(11) && lengths.count(13));  // the longest lengths walk too
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -539,6 +819,7 @@ int main(int argc, char** argv) {
         testRealizedNUniform(dawg, seeds);
         testReproducibility(dawg, seeds);
     }
+    testQualityDraw();
 
     if (argc > 1) {
         const std::vector<std::string> words = loadWordList(argv[1]);
@@ -563,6 +844,28 @@ int main(int argc, char** argv) {
             testSeedRateAndLengths(dawg, seeds, config);
             testTierOrdering(dawg, seeds, config);
             testWinnerIsTheMaximum(dawg, seeds, config);
+
+            // Ruleset v3 on the dictionary v3 actually uses: CSW21 minus the
+            // Flux removals, pruned to words that fit the letter cap.
+            std::vector<std::string> capped;
+            for (const std::string& word : words) {
+                if (fluxcore::fitsLetterCap(word.c_str(), static_cast<uint8_t>(word.size()), 2)) {
+                    capped.push_back(word);
+                }
+            }
+            const std::vector<uint8_t> cappedBytes = serializeDawg(buildDawg(capped));
+            Dawg cappedDawg;
+            CHECK(cappedDawg.loadFromMemory(cappedBytes.data(), cappedBytes.size()));
+            const RulesetConfig client = clientConfig();
+            SeedPool clientSeeds;
+            clientSeeds.buildForRuleset(cappedDawg, client);
+            std::fprintf(stderr, "v3 tests: %zu words after the cap, %zu seed words\n",
+                         capped.size(), clientSeeds.totalWords());
+            testLetterTableFill(cappedDawg, clientSeeds);
+            testLetterCap(cappedDawg, client);
+            testSeedPerBoard(cappedDawg, client);
+            testRandomWalkPlacement(cappedDawg, client);
+            testTierOrdering(cappedDawg, clientSeeds, client);
         }
     } else {
         std::fprintf(stderr, "note: pass a word-list path as argv[1] to run the seeded tests\n");

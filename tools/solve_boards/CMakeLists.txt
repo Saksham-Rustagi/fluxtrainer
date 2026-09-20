@@ -1,0 +1,2 @@
+add_executable(solve_boards main.cpp)
+target_link_libraries(solve_boards PRIVATE config_json fluxtools_common)

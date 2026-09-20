@@ -1,0 +1,256 @@
+{
+  "tierMixture": {
+    "4x4": {
+      "boards": 1787,
+      "weights": {
+        "casual": 0.14946414691601306,
+        "goodCasual": 0.7371281239661933,
+        "spam": 0.1134077291177956
+      },
+      "ci95": {
+        "casual": [
+          0.09999877748826938,
+          0.198822133266649
+        ],
+        "goodCasual": [
+          0.6688277854439716,
+          0.7992769453460733
+        ],
+        "spam": [
+          0.08318596751237024,
+          0.14063179621256566
+        ]
+      },
+      "stated": {
+        "casual": 0.3,
+        "goodCasual": 0.5,
+        "spam": 0.2
+      },
+      "logLikGainOverStated": 24.652248448718524
+    },
+    "5x5": {
+      "boards": 1078,
+      "weights": {
+        "casual": 0.07831685910934101,
+        "goodCasual": 0.8924079521520526,
+        "spam": 0.029275188738605972
+      },
+      "ci95": {
+        "casual": [
+          0.04332813399848213,
+          0.11857992247769028
+        ],
+        "goodCasual": [
+          0.8228380976480459,
+          0.945480421550348
+        ],
+        "spam": [
+          1.0837496743965304e-05,
+          0.08568665649311444
+        ]
+      },
+      "stated": {
+        "casual": 0.3,
+        "goodCasual": 0.5,
+        "spam": 0.2
+      },
+      "logLikGainOverStated": 39.219923643399454
+    }
+  },
+  "gridSplit": {
+    "current": {
+      "n4x4": 1787,
+      "n": 2865,
+      "share4x4": 0.6237347294938917,
+      "p": 0.0095026083225896,
+      "ci95": [
+        0.605701905619919,
+        0.641514433087766
+      ]
+    },
+    "season1": {
+      "n4x4": 3397,
+      "n": 3397,
+      "share4x4": 1.0,
+      "p": 0.0
+    },
+    "season2": {
+      "n4x4": 375,
+      "n": 778,
+      "share4x4": 0.4820051413881748,
+      "p": 3.644717156171367e-11
+    },
+    "season3": {
+      "n4x4": 1203,
+      "n": 1914,
+      "share4x4": 0.6285266457680251,
+      "p": 0.010982179430691703
+    },
+    "season4": {
+      "n4x4": 2,
+      "n": 5,
+      "share4x4": 0.4,
+      "p": 0.39520000000000005
+    },
+    "season6": {
+      "n4x4": 47,
+      "n": 75,
+      "share4x4": 0.6266666666666667,
+      "p": 0.7239555936773099
+    },
+    "season7": {
+      "n4x4": 244,
+      "n": 394,
+      "share4x4": 0.6192893401015228,
+      "p": 0.44112435303256925
+    },
+    "season8": {
+      "n4x4": 960,
+      "n": 1520,
+      "share4x4": 0.631578947368421,
+      "p": 0.011958004496886126
+    },
+    "season9": {
+      "n4x4": 36,
+      "n": 62,
+      "share4x4": 0.5806451612903226,
+      "p": 0.7959327912103222
+    },
+    "season10": {
+      "n4x4": 547,
+      "n": 889,
+      "share4x4": 0.6152980877390326,
+      "p": 0.35561836899115357
+    },
+    "part1": {
+      "n4x4": 3983,
+      "n": 4517,
+      "share4x4": 0.8817799424396724,
+      "p": 0.0
+    },
+    "part2": {
+      "n4x4": 2828,
+      "n": 4517,
+      "share4x4": 0.626079256143458,
+      "p": 0.00033778592157494
+    }
+  },
+  "seed": {
+    "4x4": {
+      "realLongestMean": 8.839955232232793,
+      "realLongestGe8": 0.9524342473419138,
+      "realLongestGe10": 0.19473978735310576,
+      "realLongestHist": {
+        "6": 1,
+        "7": 84,
+        "8": 557,
+        "9": 797,
+        "10": 262,
+        "11": 79,
+        "12": 6,
+        "13": 1
+      },
+      "variants": [
+        {
+          "perCandidatePerMille": 0,
+          "logLik": -2540.901519989977,
+          "winnersSeeded": 0.0,
+          "simLongestMean": 8.453656647005042,
+          "simLongestGe8": 0.8984353390074511,
+          "simLongestGe10": 0.09416103218331955
+        },
+        {
+          "perCandidatePerMille": 250,
+          "logLik": -2394.540318383359,
+          "winnersSeeded": 0.2574365484518378,
+          "simLongestMean": 8.711355190863207,
+          "simLongestGe8": 0.9252881017733067,
+          "simLongestGe10": 0.1948330969294078
+        },
+        {
+          "perCandidatePerMille": 500,
+          "logLik": -2404.0036950056347,
+          "winnersSeeded": 0.49952074959880566,
+          "simLongestMean": 8.936892410232907,
+          "simLongestGe8": 0.9441384349495303,
+          "simLongestGe10": 0.2877395013517528
+        },
+        {
+          "perCandidatePerMille": 750,
+          "logLik": -2526.466066094022,
+          "winnersSeeded": 0.7486428038718247,
+          "simLongestMean": 9.203039766743421,
+          "simLongestGe8": 0.971983906689063,
+          "simLongestGe10": 0.39055187341736014
+        },
+        {
+          "perCandidatePerMille": 1000,
+          "logLik": -3139.1700707527198,
+          "winnersSeeded": 1.000000000000002,
+          "simLongestMean": 9.46002346881656,
+          "simLongestGe8": 0.9986704337709841,
+          "simLongestGe10": 0.49035866193789235
+        }
+      ]
+    },
+    "5x5": {
+      "realLongestMean": 9.778293135435993,
+      "realLongestGe8": 0.9990723562152134,
+      "realLongestGe10": 0.5834879406307978,
+      "realLongestHist": {
+        "7": 1,
+        "8": 81,
+        "9": 367,
+        "10": 441,
+        "11": 120,
+        "12": 35,
+        "13": 29,
+        "14": 4
+      },
+      "variants": [
+        {
+          "perCandidatePerMille": 0,
+          "logLik": -1704.25723264933,
+          "winnersSeeded": 0.0,
+          "simLongestMean": 9.27873247880829,
+          "simLongestGe8": 0.9934181444319742,
+          "simLongestGe10": 0.3638783071657012
+        },
+        {
+          "perCandidatePerMille": 250,
+          "logLik": -1582.8541284995222,
+          "winnersSeeded": 0.2519678049313655,
+          "simLongestMean": 9.678125870441852,
+          "simLongestGe8": 0.9946621987387843,
+          "simLongestGe10": 0.5037688652547139
+        },
+        {
+          "perCandidatePerMille": 500,
+          "logLik": -1623.8118253695736,
+          "winnersSeeded": 0.5066590549619104,
+          "simLongestMean": 10.068481469648937,
+          "simLongestGe8": 0.9968138378794071,
+          "simLongestGe10": 0.6326227723518711
+        },
+        {
+          "perCandidatePerMille": 750,
+          "logLik": -1760.1892223693503,
+          "winnersSeeded": 0.7500830086839694,
+          "simLongestMean": 10.440039984655279,
+          "simLongestGe8": 0.9972441564248613,
+          "simLongestGe10": 0.7640215771135334
+        },
+        {
+          "perCandidatePerMille": 1000,
+          "logLik": -2396.585679928717,
+          "winnersSeeded": 0.9999999999999997,
+          "simLongestMean": 10.839583544806782,
+          "simLongestGe8": 0.9986704337709819,
+          "simLongestGe10": 0.8946533518127552
+        }
+      ]
+    }
+  },
+  "regime": "seasons 7-10",
+  "generator": "ruleset v3"
+}
