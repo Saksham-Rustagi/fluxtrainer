@@ -1,21 +1,22 @@
 import UIKit
 
-/// Flux's default theme ("aurora", flux-ios SimpleTheme.swift:222, GeneratedThemes.swift)
-/// with the derived contrast colours resolved the way Theme.init resolves them, and the
-/// default "contrast" board colour scheme (BoardView.swift getBoardLetter*Color).
+/// The "arch" theme (flux-ios GeneratedThemes.swift, themes/arch.css) with the derived
+/// contrast colours resolved the way Theme.init resolves them (highest WCAG contrast
+/// ratio among the candidates), and the "classic" board colour scheme
+/// (BoardView.swift getBoardLetter*Color).
 enum FluxTheme {
-    static let bg = UIColor(hex: 0x011926)
-    static let main = UIColor(hex: 0x00E980)
-    static let sub = UIColor(hex: 0x245C69)
-    static let subAlt = UIColor(hex: 0x000C13)
-    static let text = UIColor(hex: 0xFFFFFF)
-    static let colorfulError = UIColor(hex: 0xB94DA1)
+    static let bg = UIColor(hex: 0x0C0D11)
+    static let main = UIColor(hex: 0x7EBAB5)
+    static let sub = UIColor(hex: 0x454864)
+    static let subAlt = UIColor(hex: 0x171A25)
+    static let text = UIColor(hex: 0xF6F5F5)
+    static let colorfulError = UIColor(hex: 0xFF4754)
 
-    // Highest-contrast candidate, as Theme.init picks them for aurora.
-    static let bgContrast = text        // of [main, sub, text] against bg
-    static let subAltContrast = text    // of [main, sub, text] against subAlt
-    static let mainContrast = bg        // of [sub, text, bg] against main
-    static let subContrast = text       // of [main, text, bg] against sub
+    // Highest-contrast candidate, as Theme.init picks them for arch.
+    static let bgContrast = text        // of [main, sub, text] against bg: 17.85
+    static let subAltContrast = text    // of [main, sub, text] against subAlt: 15.94
+    static let mainContrast = bg        // of [sub, text, bg] against main: 8.86
+    static let subContrast = text       // of [main, text, bg] against sub: 8.16
 
     static let path = colorfulError     // pathColorReference default: colorfulErrorColor
 }
@@ -26,14 +27,16 @@ enum WordState {
     case validAndAvailable
 }
 
-/// The contrast scheme with tile borders on (the defaults).
+/// The classic scheme with tile borders on. It differs from contrast only for an invalid
+/// word: the tile keeps the unselected fill and foreground (subAlt / subAltContrast)
+/// rather than dropping to sub / subContrast, so only the red border marks it.
 enum TileColors {
     static func fill(selected: Bool, state: WordState) -> UIColor {
         guard selected else { return FluxTheme.subAlt }
         switch state {
         case .validAndAvailable: return FluxTheme.main
         case .validButFound: return FluxTheme.main.withAlphaComponent(0.7)
-        case .invalid: return FluxTheme.sub
+        case .invalid: return FluxTheme.subAlt
         }
     }
 
@@ -42,7 +45,7 @@ enum TileColors {
         switch state {
         case .validAndAvailable: return FluxTheme.mainContrast
         case .validButFound: return FluxTheme.mainContrast.withAlphaComponent(0.7)
-        case .invalid: return FluxTheme.subContrast
+        case .invalid: return FluxTheme.subAltContrast
         }
     }
 
