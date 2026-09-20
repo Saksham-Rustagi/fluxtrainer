@@ -1,0 +1,533 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Study queue</title>
+<style>
+:root{--bg:#fcfcfb;--fg:#0b0b0b;--muted:#52514e;--rule:#e4e3df;--accent:#2a78d6;--code:#f1f0ec;
+      --par:#2a78d6;--alpha:#b0741f;--miss:#a03a3a;--ok:#2f7d4f;--panel:#f6f5f1}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1a1a19;--fg:#f4f3ee;--muted:#c3c2b7;--rule:#3a3936;--accent:#3987e5;--code:#2b2a28;--par:#6fa8e8;--alpha:#d9a655;--miss:#e08787;--ok:#6cc08d;--panel:#232220}}
+:root[data-theme="dark"]{--bg:#1a1a19;--fg:#f4f3ee;--muted:#c3c2b7;--rule:#3a3936;--accent:#3987e5;--code:#2b2a28;--par:#6fa8e8;--alpha:#d9a655;--miss:#e08787;--ok:#6cc08d;--panel:#232220}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+main{max-width:1320px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:25px;margin:0 0 4px}
+h2{font-size:18px;margin:26px 0 8px}
+h3{font-size:15px;margin:18px 0 6px}
+p{margin:6px 0 10px;max-width:88ch}
+.sub{color:var(--muted);font-size:13.5px}
+.note{color:var(--muted);font-size:13px;max-width:92ch}
+code,.mono{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:var(--code);padding:1px 5px;border-radius:4px}
+nav.tabs{display:flex;gap:4px;margin:16px 0 14px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+nav.tabs button{background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+  font:inherit;font-size:14px;padding:8px 12px;cursor:pointer}
+nav.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;margin:0 0 14px}
+.row{display:flex;flex-wrap:wrap;gap:14px 18px;align-items:flex-end}
+.f{display:flex;flex-direction:column;gap:3px}
+.f label{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+input,select{font:inherit;font-size:13.5px;padding:4px 7px;border:1px solid var(--rule);
+  border-radius:5px;background:var(--bg);color:var(--fg)}
+input[type=range]{padding:0;width:130px}
+input.w6{width:78px}input.w9{width:112px}input.w14{width:190px}
+button.mini{font:inherit;font-size:12.5px;padding:3px 9px;border:1px solid var(--rule);
+  border-radius:5px;background:var(--bg);color:var(--fg);cursor:pointer}
+table{border-collapse:collapse;font-size:13px;width:100%}
+th,td{border-bottom:1px solid var(--rule);padding:5px 8px;text-align:left;vertical-align:top;white-space:nowrap}
+th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--bg);cursor:pointer;z-index:2}
+th.no{cursor:default}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.hk{cursor:pointer}
+tr.hk:hover{background:var(--code)}
+tr.hk.open{background:var(--code)}
+td.why{white-space:normal;color:var(--muted);font-size:12.5px;max-width:none}
+.badge{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;border:1px solid currentColor;line-height:1.5}
+.b-par{color:var(--par)}.b-alpha{color:var(--alpha)}.b-misswipe{color:var(--miss)}
+.b-additive{color:var(--ok)}.b-cellmate{color:var(--accent)}.b-mutating{color:var(--muted)}.b-dead{color:var(--miss)}
+.st-unknown{color:var(--miss)}.st-learning{color:var(--alpha)}.st-known{color:var(--muted)}
+.det{background:var(--panel)}
+.det td{white-space:normal;padding:10px 14px 14px}
+.det table{font-size:12.5px;margin:6px 0 2px}
+.det th{background:var(--panel)}
+.wrap{overflow-x:auto}
+.scroll{max-height:70vh;overflow-y:auto;border:1px solid var(--rule);border-radius:7px}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:8px 16px;margin:10px 0}
+.kv div{border-left:2px solid var(--rule);padding-left:9px}
+.kv b{display:block;font-size:19px;font-variant-numeric:tabular-nums;font-weight:600}
+.kv span{font-size:11.5px;color:var(--muted)}
+.muted{color:var(--muted)}
+.strike{text-decoration:line-through;opacity:.7}
+.count{font-size:12.5px;color:var(--muted);margin:6px 0 8px}
+ul.tight{margin:4px 0 10px;padding-left:20px}
+ul.tight li{margin:3px 0;max-width:92ch}
+.hide{display:none}
+</style></head><body><main>
+
+<h1>Study queue</h1>
+<p class="sub" id="head"></p>
+<p class="note">Every item is a hook: a stem and the branches hanging off it. Nothing here is
+ranked as a bare word, because a 5+ word is taken 74% of the time when it extends something
+already found on the board and about 1% otherwise. Click any row for its branches, its dead
+affixes, and the numbers behind its position.</p>
+
+<nav class="tabs" id="tabs"></nav>
+
+<section id="t-queue">
+  <div class="panel">
+    <div class="row">
+      <div class="f"><label>Track</label><select id="fTrack">
+        <option value="">all</option><option>par</option><option>alpha</option><option>misswipe</option></select></div>
+      <div class="f"><label>Stem length</label><select id="fLen">
+        <option value="">any</option><option>3</option><option>4</option><option>5</option></select></div>
+      <div class="f"><label>Cue (enumerability 2-6)</label><select id="fCue">
+        <option value="">either</option><option value="1">works as a board cue</option>
+        <option value="0">study only</option></select></div>
+      <div class="f"><label>Owned branches &ge;</label><input class="w6" type="number" id="fOwned" value="0" min="0"></div>
+      <div class="f"><label>Study items &ge;</label><input class="w6" type="number" id="fItems" value="1" min="0"></div>
+      <div class="f"><label>Branch class present</label><select id="fCls">
+        <option value="">any</option><option>additive</option><option>cellmate</option>
+        <option>mutating</option><option>dead</option></select></div>
+      <div class="f"><label>Grid</label><select id="fGrid">
+        <option value="">both</option><option value="4x4">4x4</option><option value="5x5">5x5</option></select></div>
+      <div class="f"><label>Tier (lower bound &ge;)</label><select id="fTier">
+        <option value="">any</option><option value="casual">casual</option>
+        <option value="goodCasual">good casual</option><option value="spam">spam</option></select></div>
+      <div class="f"><label>My rate, min</label><input class="w6" type="number" id="fMyLo" value="0" step="0.05" min="0" max="1"></div>
+      <div class="f"><label>My rate, max</label><input class="w6" type="number" id="fMyHi" value="1" step="0.05" min="0" max="1"></div>
+      <div class="f"><label>Stem contains</label><input class="w9" id="fStem" placeholder="e.g. RAI"></div>
+      <div class="f"><label>Sort</label><select id="fSort">
+        <option value="score">score (points per unit effort)</option>
+        <option value="value">expected gain</option>
+        <option value="presentShare">presence</option>
+        <option value="residual">residual</option>
+        <option value="enumerabilityFindable">enumerability</option>
+        <option value="studyItems">study items</option>
+        <option value="unknown">unknown branches</option></select></div>
+      <div class="f"><label>&nbsp;</label><button class="mini" id="reset">reset</button></div>
+    </div>
+    <div class="row" style="margin-top:12px;border-top:1px solid var(--rule);padding-top:10px">
+      <div class="f"><label>Par weight <b id="lwPar"></b></label><input type="range" id="wPar" min="0" max="2" step="0.1"></div>
+      <div class="f"><label>Alpha weight <b id="lwAlpha"></b></label><input type="range" id="wAlpha" min="0" max="2" step="0.1"></div>
+      <div class="f"><label>Misswipe weight <b id="lwMiss"></b></label><input type="range" id="wMiss" min="0" max="1" step="0.05"></div>
+      <div class="f"><label>Overlap</label><select id="wDedup">
+        <option value="1">queue order (skip words already taught above)</option>
+        <option value="0">standalone score (every hook on its own)</option></select></div>
+    </div>
+    <p class="note" id="weightNote"></p>
+  </div>
+  <div class="count" id="qCount"></div>
+  <div class="wrap scroll"><table id="qTable"></table></div>
+</section>
+
+<section id="t-words" class="hide">
+  <div class="panel">
+    <div class="row">
+      <div class="f"><label>Starts with</label><input class="w9" id="sStart"></div>
+      <div class="f"><label>Ends with</label><input class="w9" id="sEnd"></div>
+      <div class="f"><label>Contains</label><input class="w9" id="sHas"></div>
+      <div class="f"><label>Pattern (? = any)</label><input class="w9" id="sPat" placeholder="P?AT??S"></div>
+      <div class="f"><label>Anagram of</label><input class="w9" id="sAna" placeholder="PRATES"></div>
+      <div class="f"><label>Subword of</label><input class="w9" id="sSub" placeholder="PRATERS"></div>
+      <div class="f"><label>Length</label><input class="w6" type="number" id="sLenLo" min="3" max="12" placeholder="min"></div>
+      <div class="f"><label>&nbsp;</label><input class="w6" type="number" id="sLenHi" min="3" max="12" placeholder="max"></div>
+      <div class="f"><label>My status</label><select id="sStatus">
+        <option value="">any</option><option>unknown</option><option>learning</option><option>known</option></select></div>
+      <div class="f"><label>Track</label><select id="sTrack">
+        <option value="">any</option><option>par</option><option>alpha</option></select></div>
+      <div class="f"><label>Points &ge;</label><select id="sPts">
+        <option value="0">any</option><option value="400">400</option><option value="800">800</option>
+        <option value="1400">1400</option><option value="1800">1800</option></select></div>
+      <div class="f"><label>Hook</label><input class="w9" id="sHook" placeholder="stem"></div>
+      <div class="f"><label>Seen % above, in</label><select id="sTier">
+        <option value="">-</option>
+        <option value="4x4_casual">4x4 casual</option><option value="4x4_goodCasual">4x4 good casual</option>
+        <option value="4x4_spam">4x4 spam</option><option value="5x5_casual">5x5 casual</option>
+        <option value="5x5_goodCasual">5x5 good casual</option><option value="5x5_spam">5x5 spam</option></select></div>
+      <div class="f"><label>&nbsp;</label><input class="w6" type="number" id="sTierP" step="0.5" placeholder="%"></div>
+      <div class="f"><label>In the queue only</label><select id="sQueue">
+        <option value="1">yes</option><option value="0">no, everything I meet</option></select></div>
+      <div class="f"><label>&nbsp;</label><button class="mini" id="resetW">reset</button></div>
+    </div>
+  </div>
+  <div class="count" id="wCount"></div>
+  <div class="wrap scroll"><table id="wTable"></table></div>
+</section>
+
+<section id="t-miss" class="hide">
+  <div id="missHead"></div>
+  <div class="panel"><div class="row">
+    <div class="f"><label>Cause</label><select id="mCause">
+      <option value="">all</option><option>affixError</option><option>trueNonWord</option>
+      <option>earlyLift</option><option>pathError</option></select></div>
+    <div class="f"><label>Study items only</label><select id="mStudy">
+      <option value="0">no</option><option value="1">yes</option></select></div>
+    <div class="f"><label>Attempted &ge;</label><input class="w6" type="number" id="mTimes" value="2" min="1"></div>
+  </div></div>
+  <div class="count" id="mCount"></div>
+  <div class="wrap scroll"><table id="mTable"></table></div>
+</section>
+
+<section id="t-method" class="hide"><div id="method"></div></section>
+
+<script>
+const D = /*__DATA__*/null;
+const HC = {}; D.hookCols.forEach((c,i)=>HC[c]=i);
+const WC = {}; D.wordCols.forEach((c,i)=>WC[c]=i);
+const MC = {}; D.misswipeCols.forEach((c,i)=>MC[c]=i);
+const SW = D.strings;                 // every word name, referenced by index everywhere
+const WROW = new Map();               // word index -> its row in the words table
+D.words.forEach(r=>WROW.set(r[WC.word], r));
+const WQ = (si,c) => { const r=WROW.get(si); return r? r[WC[c]] : null; };
+const pct = v => v===null||v===undefined ? '' : (100*v).toFixed(1)+'%';
+const pct0 = v => v===null||v===undefined ? '' : (100*v).toFixed(0)+'%';
+const n1 = v => v===null||v===undefined ? '' : v.toFixed(1);
+const n2 = v => v===null||v===undefined ? '' : v.toFixed(2);
+const n0 = v => v===null||v===undefined ? '' : Math.round(v).toLocaleString();
+const esc = s => String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const badge=(t,k)=>`<span class="badge b-${k||t}">${t}</span>`;
+
+/* ---- ordering: the same greedy rank.order runs, so the weights are live ---- */
+function order(w, dedup){
+  const n = D.hooks.length, out = [];
+  const val = (i, claimed) => {
+    let par=0, al=0;
+    for(const [wi,v,tr] of D.hookItems[i]){ if(claimed && claimed.has(wi)) continue;
+      if(tr===0) par+=v; else al+=v; }
+    return w.par*par + w.alpha*al + w.miss*(D.hooks[i][HC.deadPoints]||0);
+  };
+  const eff = i => D.hooks[i][HC.effort];
+  if(!dedup){
+    const idx=[...Array(n).keys()];
+    idx.forEach(i=>out.push({i, score: val(i,null)/eff(i), value: val(i,null), newWords: D.hookItems[i].length}));
+    out.sort((a,b)=>b.score-a.score);
+    return out;
+  }
+  // lazy greedy: marginal value falls as words are claimed, the denominator is fixed
+  const heap=[]; for(let i=0;i<n;i++) heap.push([val(i,null)/eff(i), i, 0]);
+  heap.sort((a,b)=>b[0]-a[0]);
+  const claimed=new Set(); let version=0;
+  const pq = heap;  // array kept sorted-ish; re-insert keeps it honest for our sizes
+  while(pq.length){
+    const top = pq.shift();
+    let [s,i,ver] = top;
+    if(ver!==version){
+      s = val(i, claimed)/eff(i);
+      if(pq.length && s < pq[0][0]){
+        let lo=0, hi=pq.length;
+        while(lo<hi){ const m=(lo+hi)>>1; if(pq[m][0]>s) lo=m+1; else hi=m; }
+        pq.splice(lo,0,[s,i,version]); continue;
+      }
+    }
+    let nw=0; for(const [wi] of D.hookItems[i]) if(!claimed.has(wi)) nw++;
+    out.push({i, score:s, value:s*eff(i), newWords:nw});
+    const before=claimed.size;
+    for(const [wi] of D.hookItems[i]) claimed.add(wi);
+    if(claimed.size!==before) version++;
+  }
+  return out;
+}
+
+let ORD=null, OPEN=new Set();
+function weights(){ return {par:+$('wPar').value, alpha:+$('wAlpha').value, miss:+$('wMiss').value}; }
+function $(id){ return document.getElementById(id); }
+
+function hookPasses(h, tiers, o){
+  const f=FQ;
+  if(f.track && h[HC.track]!==f.track) return false;
+  if(f.len && h[HC.stemLen]!=f.len) return false;
+  if(f.cue!=='' && (h[HC.cueable]?1:0)!=f.cue) return false;
+  if(h[HC.owned] < f.owned) return false;
+  if(o.newWords < f.items && h[HC.studyItems] < f.items) return false;
+  if(f.grid && (f.grid==='4x4'? h[HC.pres4x4] : h[HC.pres5x5]) < 0.005) return false;
+  if(f.tier){ let ok=false; D.tiers.forEach((t,i)=>{ if(t.endsWith(f.tier) && tiers[i]>=0.005) ok=true; });
+              if(!ok) return false; }
+  if(f.stem && h[HC.stem].indexOf(f.stem)<0) return false;
+  return true;
+}
+let FQ={};
+function readQ(){
+  FQ={track:$('fTrack').value, len:$('fLen').value, cue:$('fCue').value,
+      owned:+$('fOwned').value||0, items:+$('fItems').value||0, cls:$('fCls').value,
+      grid:$('fGrid').value, tier:$('fTier').value, myLo:+$('fMyLo').value, myHi:+$('fMyHi').value,
+      stem:$('fStem').value.toUpperCase().trim(), sort:$('fSort').value};
+}
+
+function branchRate(i){ // does any study item sit in the my-rate window, and is the class present
+  let okRate = (FQ.myLo<=0 && FQ.myHi>=1), okCls = !FQ.cls;
+  for(const r of D.branches[i]){
+    if(FQ.cls && D.cls[r[1]]===FQ.cls) okCls=true;
+    const m=WQ(r[0],'myRate');
+    if(WQ(r[0],'expectedGain')>0 && m!==null && m>=FQ.myLo && m<=FQ.myHi) okRate=true;
+  }
+  if(FQ.cls==='dead' && D.dead[i].length) okCls=true;
+  return okRate && okCls;
+}
+
+function renderQueue(){
+  readQ();
+  const w=weights();
+  ORD = order(w, $('wDedup').value==='1');
+  let rows = ORD.filter(o=>hookPasses(D.hooks[o.i], D.hookTiers[o.i], o) && branchRate(o.i));
+  const key=FQ.sort;
+  if(key!=='score'){
+    rows=[...rows].sort((a,b)=>{
+      const av = key==='value'? a.value : D.hooks[a.i][HC[key]];
+      const bv = key==='value'? b.value : D.hooks[b.i][HC[key]];
+      return (bv||0)-(av||0);
+    });
+  }
+  $('qCount').textContent = `${rows.length.toLocaleString()} hooks of ${D.hooks.length.toLocaleString()}; `
+    + `${rows.slice(0,100).reduce((s,o)=>s+o.value,0).toFixed(0)} points a game in the top 100 shown, `
+    + `${new Set(rows.slice(0,100).flatMap(o=>D.hookItems[o.i].map(x=>x[0]))).size} distinct words.`;
+  const head=`<thead><tr><th class="no num">#</th><th class="no">stem</th><th class="no">track</th>
+    <th class="no num">score</th><th class="no num">pts/game</th><th class="no num">new</th>
+    <th class="no num">own</th><th class="no num">unk</th><th class="no num">family</th>
+    <th class="no num">on boards</th><th class="no num">enum</th><th class="no num">residual</th>
+    <th class="no num">effort</th><th class="no">why it is here</th></tr></thead>`;
+  const body = rows.slice(0,600).map((o,ix)=>{
+    const h=D.hooks[o.i];
+    return `<tr class="hk${OPEN.has(o.i)?' open':''}" data-i="${o.i}">
+      <td class="num">${ix+1}</td>
+      <td><b>${h[HC.stem]}-</b>${h[HC.isWord]?'':' <span class="muted">frag</span>'}</td>
+      <td>${badge(h[HC.track])}</td>
+      <td class="num">${n2(o.score)}</td><td class="num">${n1(o.value)}</td>
+      <td class="num">${o.newWords}</td><td class="num">${h[HC.owned]}</td><td class="num">${h[HC.unknown]}</td>
+      <td class="num">${h[HC.familySize]}</td><td class="num">${pct0(h[HC.presentShare])}</td>
+      <td class="num">${n1(h[HC.enumerabilityFindable])}${h[HC.cueable]?' <span class="badge b-additive">cue</span>':''}</td>
+      <td class="num">${n0(h[HC.residual])}</td><td class="num">${n1(h[HC.effort])}</td>
+      <td class="why">${esc(h[HC.why])}</td></tr>`
+      + (OPEN.has(o.i)? detail(o.i) : '');
+  }).join('');
+  $('qTable').innerHTML = head + '<tbody>' + body + '</tbody>';
+  [...$('qTable').querySelectorAll('tr.hk')].forEach(tr=>tr.onclick=()=>{
+    const i=+tr.dataset.i; OPEN.has(i)?OPEN.delete(i):OPEN.add(i); renderQueue();
+  });
+}
+
+function ext(stem, word, cls){
+  if(cls!=='additive') return cls==='cellmate'? 'same cells' : '';
+  const k=word.indexOf(stem);
+  if(k<0) return '';
+  const f=word.slice(0,k), b=word.slice(k+stem.length);
+  return (f? f+'-':'') + (b? '-'+b : '');
+}
+function detail(i){
+  const h=D.hooks[i], stem=h[HC.stem];
+  const rows=D.branches[i].map(r=>{
+    const w=SW[r[0]], cls=D.cls[r[1]], st=WQ(r[0],'status')||'';
+    return `<tr>
+    <td><b>${w}</b> <span class="muted mono">${esc(ext(stem,w,cls))}</span></td>
+    <td>${badge(cls)}${r[4]===0&&cls!=='dead'&&cls!=='mutating'?' <span class="muted">no free points</span>':''}</td>
+    <td class="num">${WQ(r[0],'pts')||''}</td>
+    <td class="num st-${st}">${pct(WQ(r[0],'myRate'))}</td>
+    <td class="num">${pct(WQ(r[0],'fieldRate'))}</td>
+    <td class="num">${pct(WQ(r[0],'topQRate'))}${WQ(r[0],'nTopQ')?` <span class="muted">n=${WQ(r[0],'nTopQ')}</span>`:''}</td>
+    <td class="num">${WQ(r[0],'presPerGame')===null?'<span class="muted">never met</span>':WQ(r[0],'presPerGame').toFixed(3)}</td>
+    <td class="num">${pct(r[2])} <span class="muted">${D.src[r[3]]}</span></td>
+    <td class="num">${n2(WQ(r[0],'belief'))}</td>
+    <td class="num">${WQ(r[0],'expectedGain')>0? n1(WQ(r[0],'expectedGain')) : ''}</td></tr>`;}).join('');
+  const dead = D.dead[i].map(d=>`<span class="badge b-dead mono" title="${SW[d[0]]}">${d[1]}</span>`).join(' ');
+  const tiers = D.tiers.map((t,k)=>`${t.replace('_',' ')} ${pct0(D.hookTiers[i][k])}`).join(' &middot; ');
+  return `<tr class="det"><td colspan="14">
+    <table><thead><tr><th class="no">branch</th><th class="no">class</th><th class="no num">pts</th>
+      <th class="no num">me</th><th class="no num">field</th><th class="no num">top 25%</th>
+      <th class="no num">per game</th><th class="no num">reach</th><th class="no num">belief</th>
+      <th class="no num">pts/game</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="note"><b>Dead affixes</b>, the half of the grid that prevents misswipes: ${dead||'none'}.
+      ${h[HC.deadBranches]} in all, exposure ${n2(h[HC.deadExposure])},
+      worth ${n1(h[HC.deadPoints])} points a game at the current misswipe weight.</p>
+    <p class="note"><b>Presence, lower bound by cell</b>: ${tiers}.
+      4x4 ${pct0(h[HC.pres4x4])} &middot; 5x5 ${pct0(h[HC.pres5x5])}, measured on your own boards
+      (${h[HC.presentGames]} of ${D.meta.gamesCur.toLocaleString()} games).</p>
+    <p class="note"><b>Enumerability</b> ${n2(h[HC.enumerabilityFindable])} (${h[HC.enumerabilitySource]});
+      counting only branches that extend the stem's own path, ${n2(h[HC.enumerability])}.
+      Coherence ${n2(h[HC.coherence])}. Effort ${n1(h[HC.effort])}${h[HC.owned]>=2?', after the owned-hook discount':''};
+      standalone score ${n2(h[HC.scoreStandalone])}, against ${n2(h[HC.score])} in queue order.
+      Branch list capped at ${D.branchCap} rows; branches under 0.5% reach that you have never met are left out.</p>
+  </td></tr>`;
+}
+
+/* ---- words ---- */
+let WSORT='expectedGain', WDIR=-1;
+function readW(){
+  const g=id=>$(id).value.toUpperCase().trim();
+  return {start:g('sStart'), end:g('sEnd'), has:g('sHas'), pat:g('sPat'), ana:g('sAna'),
+          sub:g('sSub'), lenLo:+$('sLenLo').value||0, lenHi:+$('sLenHi').value||99,
+          status:$('sStatus').value, track:$('sTrack').value, pts:+$('sPts').value,
+          hook:g('sHook'), tier:$('sTier').value, tierP:+$('sTierP').value||0,
+          queue:$('sQueue').value==='1'};
+}
+function sortedKey(s){ return s.split('').sort().join(''); }
+function subwordOf(w, host){
+  const c={}; for(const ch of host) c[ch]=(c[ch]||0)+1;
+  for(const ch of w){ if(!c[ch]) return false; c[ch]--; }
+  return true;
+}
+function renderWords(){
+  const f=readW();
+  const anaKey = f.ana? sortedKey(f.ana):'';
+  let rows=D.words.filter(r=>{
+    const w=SW[r[WC.word]];
+    if(f.queue && !(r[WC.expectedGain]>0)) return false;
+    if(f.start && !w.startsWith(f.start)) return false;
+    if(f.end && !w.endsWith(f.end)) return false;
+    if(f.has && w.indexOf(f.has)<0) return false;
+    if(f.pat){ if(w.length!==f.pat.length) return false;
+      for(let i=0;i<w.length;i++) if(f.pat[i]!=='?' && f.pat[i]!==w[i]) return false; }
+    if(anaKey && r[WC.akey]!==anaKey) return false;
+    if(f.sub && !subwordOf(w,f.sub)) return false;
+    if(w.length<f.lenLo || w.length>f.lenHi) return false;
+    if(f.status && r[WC.status]!==f.status) return false;
+    if(f.track && r[WC.track]!==f.track) return false;
+    if(f.pts && r[WC.pts]<f.pts) return false;
+    if(f.hook && r[WC.hook]!==f.hook) return false;
+    if(f.tier && f.tierP && (r[WC['p_'+f.tier]]||0)*100 < f.tierP) return false;
+    return true;
+  });
+  rows.sort((a,b)=>{ const i=WC[WSORT];
+    let av=a[i], bv=b[i];
+    if(WSORT==='word'){ av=SW[av]; bv=SW[bv]; }
+    if(typeof av==='string'||typeof bv==='string') return WDIR*String(av).localeCompare(String(bv));
+    return WDIR*((av===null?-1:av)-(bv===null?-1:bv)); });
+  $('wCount').textContent = `${rows.length.toLocaleString()} words; `
+    + `${rows.reduce((s,r)=>s+(r[WC.expectedGain]||0),0).toFixed(0)} points a game between them.`;
+  const cols=[['word','word'],['len','len'],['pts','pts'],['track','track'],['hook','hook'],
+    ['hookClass','class'],['myRate','me'],['fieldRate','field'],['topQRate','top 25%'],
+    ['nTopQ','n'],['presPerGame','per game'],['nCur','boards'],['expectedGain','pts/game'],
+    ['belief','belief'],['status','status'],['findability','findability']];
+  const head='<thead><tr>'+cols.map(([k,l])=>
+    `<th data-k="${k}" class="${['word','track','hook','hookClass','status','findability'].includes(k)?'':'num'}">${l}${WSORT===k?(WDIR<0?' ↓':' ↑'):''}</th>`).join('')+'</tr></thead>';
+  const body=rows.slice(0,1500).map(r=>`<tr>
+    <td><b>${SW[r[WC.word]]}</b></td><td class="num">${r[WC.len]}</td><td class="num">${r[WC.pts]}</td>
+    <td>${r[WC.track]?badge(r[WC.track]):''}</td><td>${r[WC.hook]?r[WC.hook]+'-':''}</td>
+    <td>${r[WC.hookClass]?badge(r[WC.hookClass]):''}</td>
+    <td class="num">${pct(r[WC.myRate])}</td><td class="num">${pct(r[WC.fieldRate])}</td>
+    <td class="num">${pct(r[WC.topQRate])}</td><td class="num">${r[WC.nTopQ]||''}</td>
+    <td class="num">${r[WC.presPerGame]===null?'':r[WC.presPerGame].toFixed(3)}</td>
+    <td class="num">${r[WC.nCur]}</td><td class="num">${r[WC.expectedGain]>0?n1(r[WC.expectedGain]):''}</td>
+    <td class="num">${n2(r[WC.belief])}</td><td class="st-${r[WC.status]}">${r[WC.status]||''}</td>
+    <td class="muted">${r[WC.findability]||''}</td></tr>`).join('');
+  $('wTable').innerHTML=head+'<tbody>'+body+'</tbody>';
+  [...$('wTable').querySelectorAll('th')].forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; if(!k) return;
+    if(WSORT===k) WDIR=-WDIR; else {WSORT=k; WDIR=-1;} renderWords(); });
+  if(rows.length>1500) $('wCount').textContent+=' Showing the first 1,500.';
+}
+
+/* ---- misswipes ---- */
+function renderMiss(){
+  const cause=$('mCause').value, study=$('mStudy').value==='1', times=+$('mTimes').value||1;
+  let rows=D.misswipes.filter(r=> (!cause||r[MC.cause]===cause) && (!study||r[MC.studyItem]===true||r[MC.studyItem]==='True')
+    && r[MC.times]>=times);
+  rows.sort((a,b)=> b[MC.times]-a[MC.times] || b[MC.secondsAllIn]-a[MC.secondsAllIn]);
+  $('mCount').textContent = `${rows.length} strings, ${rows.reduce((s,r)=>s+r[MC.times],0)} attempts, `
+    + `${rows.reduce((s,r)=>s+r[MC.secondsAllIn],0).toFixed(1)} s over ${D.summary.tracks.misswipe.byCause?8:8} games.`;
+  const head=`<thead><tr><th class="no">attempt</th><th class="no num">times</th><th class="no num">s lost</th>
+    <th class="no">cause</th><th class="no">stem + affix</th><th class="no">nearest valid on that board</th>
+    <th class="no">live affixes on the stem</th><th class="no">study item</th></tr></thead>`;
+  $('mTable').innerHTML=head+'<tbody>'+rows.map(r=>`<tr>
+    <td><b class="strike">${r[MC.attempt]}</b></td><td class="num">${r[MC.times]}</td>
+    <td class="num">${n1(r[MC.secondsAllIn])}</td>
+    <td>${badge(r[MC.cause], r[MC.cause]==='affixError'||r[MC.cause]==='trueNonWord'?'dead':'mutating')}</td>
+    <td class="mono">${r[MC.stem]?esc(r[MC.stem])+' '+esc(r[MC.affix]):''}</td>
+    <td class="mono muted">${esc(r[MC.nearestValid]||'')}</td>
+    <td class="mono muted">${esc(r[MC.liveAffixes]||'')}</td>
+    <td>${(r[MC.studyItem]===true||r[MC.studyItem]==='True')?'yes':'diagnostic only'}</td></tr>`).join('')+'</tbody>';
+}
+
+/* ---- chrome ---- */
+const TABS=[['queue','Hook queue'],['words','Words'],['miss','Misswipes'],['method','How these numbers were made']];
+function showTab(k){
+  TABS.forEach(([id])=>$('t-'+id).classList.toggle('hide', id!==k));
+  [...$('tabs').children].forEach(b=>b.classList.toggle('on', b.dataset.k===k));
+  if(k==='queue') renderQueue(); if(k==='words') renderWords(); if(k==='miss') renderMiss();
+}
+$('tabs').innerHTML=TABS.map(([k,l])=>`<button data-k="${k}">${l}</button>`).join('');
+[...$('tabs').children].forEach(b=>b.onclick=()=>showTab(b.dataset.k));
+
+function setWeights(){
+  $('lwPar').textContent=(+$('wPar').value).toFixed(1);
+  $('lwAlpha').textContent=(+$('wAlpha').value).toFixed(1);
+  $('lwMiss').textContent=(+$('wMiss').value).toFixed(2);
+  $('weightNote').innerHTML = `Score = (par weight &times; par gain + alpha weight &times; alpha gain `
+    + `+ misswipe weight &times; dead-affix points) / effort. The misswipe term is calibrated to a `
+    + `measured cost &mdash; affix errors take ${D.deadMeta.affixSecondsPerGame.toFixed(1)} s of an `
+    + `80 s clock, worth up to ${Math.round(D.deadMeta.deadPointsPerGameTotal).toLocaleString()} points `
+    + `a game across the whole queue &mdash; but nothing measures how much of that drilling actually `
+    + `removes, so its default weight of ${D.weights.misswipe} is a judgement and this slider is where `
+    + `you argue with it.`;
+}
+['wPar','wAlpha','wMiss'].forEach(id=>$(id).oninput=()=>{setWeights(); renderQueue();});
+$('wPar').value=D.weights.par; $('wAlpha').value=D.weights.alpha; $('wMiss').value=D.weights.misswipe;
+$('wDedup').onchange=renderQueue;
+['fTrack','fLen','fCue','fOwned','fItems','fCls','fGrid','fTier','fMyLo','fMyHi','fStem','fSort']
+  .forEach(id=>$(id).oninput=renderQueue);
+$('reset').onclick=()=>{['fTrack','fLen','fCue','fCls','fGrid','fTier','fStem'].forEach(i=>$(i).value='');
+  $('fOwned').value=0; $('fItems').value=1; $('fMyLo').value=0; $('fMyHi').value=1;
+  $('fSort').value='score'; renderQueue();};
+['sStart','sEnd','sHas','sPat','sAna','sSub','sLenLo','sLenHi','sStatus','sTrack','sPts','sHook','sTier','sTierP','sQueue']
+  .forEach(id=>$(id).oninput=renderWords);
+$('resetW').onclick=()=>{['sStart','sEnd','sHas','sPat','sAna','sSub','sLenLo','sLenHi','sStatus','sTrack','sHook','sTier','sTierP'].forEach(i=>$(i).value='');
+  $('sPts').value='0'; $('sQueue').value='1'; renderWords();};
+['mCause','mStudy','mTimes'].forEach(id=>$(id).oninput=renderMiss);
+
+const S=D.summary;
+$('head').innerHTML = `${S.hooks.inQueue.toLocaleString()} hooks and `
+  + `${S.tracks.par.words + S.tracks.alpha.words} words survived repricing, out of `
+  + `${S.hooks.mined.toLocaleString()} stems mined over ${S.hooks.universe.toLocaleString()} words `
+  + `you actually meet. ${S.meta.gamesCur.toLocaleString()} ranked games in the current regime, `
+  + `plus ${S.clone ? 8 : 8} clone games for the misswipe track. Generated ${D.generated}.`;
+$('missHead').innerHTML = `<div class="kv">
+  <div><b>${S.tracks.misswipe.secondsPerGameAllInvalid.toFixed(1)} s</b><span>a game on invalid attempts, of 80</span></div>
+  <div><b>${S.tracks.misswipe.secondsPerGameLearnable.toFixed(1)} s</b><span>of that is learnable: affix errors and true non-words</span></div>
+  <div><b>${S.tracks.misswipe.repeatedStrings}</b><span>strings attempted twice or more</span></div>
+  <div><b>${S.tracks.misswipe.studyItems}</b><span>of them become study items</span></div></div>
+  <p class="note">Path errors and early lifts are motor, not vocabulary, and are shown as
+  diagnostics only. Nothing here is a score and nothing pressures you to swipe less: some
+  invalid attempts are how you search a board, and suppressing them would cost you words.</p>`;
+
+$('method').innerHTML = `
+<h2>What this queue is</h2>
+<p>The unit is a hook, never a bare word. A study item is <code>RAI-</code> with its branches,
+not SERAI as a string, because you take a 5+ letter word 74% of the time when it extends
+something already found and about 1% otherwise.</p>
+<h3>Repricing</h3>
+<p>The shipped alpha list priced every word at the take rate you reach on words you already
+find reliably, which is selection: a word is reliable because you find it. Every word here is
+priced instead at the top quartile's own rate on that word, floored at yours:</p>
+<p><code>achievable(w) = max(topQuartileRate(w), myRate(w))</code><br>
+<code>expectedGain(w) = presencesPerGame(w) &times; points(w) &times; (achievable(w) &minus; myRate(w))</code></p>
+<p>Words you already take more often than the top quartile go to zero by construction and
+leave the queue: ${S.repricing.droppedBeatTopQ.toLocaleString()} of the
+${S.repricing.candidates.toLocaleString()} old alpha candidates did exactly that. The
+top-quartile rate is trusted only above ${S.checks.minTopQPresences} presences in top-quartile
+games; ${S.repricing.droppedTopQUntrusted.toLocaleString()} more dropped for want of that
+evidence rather than for want of value. On the same candidate set the total expected gain falls
+from ${Math.round(S.repricing.oldAllGain).toLocaleString()} points a game to
+${Math.round(S.repricing.newSameSetGain).toLocaleString()}.</p>
+<h3>Reachability</h3>
+<p>Per branch, P(branch present and reachable | stem path present). Measured from the v3
+simulation where the branch extends its stem by one of the 60 affixes the measure tool mined
+from the dictionary; observed directly on your own boards where the stem is present in 200+
+games and the branch is not the only reason it was; otherwise fitted, by a per-letter
+multiplicative model over those 60 affixes
+(R&sup2; ${S.reachFit['4x4:goodCasual'].r2LogP.toFixed(3)} on log p, median error
+${(100*S.reachFit['4x4:goodCasual'].medianAbsRatio).toFixed(0)}% on 4x4 good casual).
+Every branch row says which of the three it used.</p>
+<h3>Enumerability</h3>
+<p>E[members findable | stem path present], the test of whether a stem works as a cue to hunt
+for at all rather than what is worth studying. Target 2 to 6: below it there is nothing to run
+through, above it you cannot check them all. Phase 1 measured the usable band at 3 to 4 letters,
+with 5 as Spam-tier material, and 82 of the top 100 hooks here are 4-letter stems.</p>
+<h3>What is soft</h3>
+<ul class="tight">
+<li>The misswipe weight, as the slider says: the cost is measured, the fraction drilling removes is not.</li>
+<li>The top-quartile rate is pooled across regimes for sample size, while presence and your own
+rate are current-regime only. The board generator changed before season 7; how often a word is
+<i>present</i> moved with it, how often a strong player <i>takes</i> it once present should not have.</li>
+<li>Effort is a count of study items weighted by class, not a measured learning cost. Nothing in
+the project measures learning time yet.</li>
+<li>Eight clone games. The misswipe rates are provisional; the structure is the finding.</li>
+</ul>`;
+setWeights(); showTab('queue');
+</script>
+</main></body></html>
