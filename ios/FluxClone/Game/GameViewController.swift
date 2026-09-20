@@ -9,6 +9,55 @@ struct GameResult {
     let invalid: Int
     let duplicates: Int
     let abandoned: Bool
+    /// Every valid word taken, with the time it was taken and the cells it used. Phase 3
+    /// needs all three: the time to find, the path for the review, and the cells for
+    /// deciding whether a later find was free off this one.
+    var found: [FoundWord] = []
+    /// Rejected strings, for the misswipe half of the affix grid.
+    var invalidWords: [String] = []
+    /// The board clock's zero, so a find time can be turned into game time.
+    var tBoardShown: Double = 0
+}
+
+struct FoundWord {
+    let word: String
+    let t: Double
+    let cells: [Int]
+}
+
+/// What kind of board this is. Phase 1 had one; Phase 3 has four, and they differ only in
+/// the clock, what is on screen and what happens at the end. The board itself -- geometry,
+/// hit target, interpolation, haptics -- is identical in all of them, which is the point:
+/// if the drill board felt different from the game board, the motor pattern being trained
+/// would be the wrong one.
+struct GameMode {
+    enum Kind: String {
+        case ranked
+        case warmup
+        case branchCompletion = "branch_completion"
+        case familySweep = "family_sweep"
+    }
+
+    var kind: Kind = .ranked
+    var duration: Double = GameViewController.duration
+    /// A drill board shows the stem, a counter and the clock. Nothing else: no score, no
+    /// word count, no text.
+    var showsScore = true
+    /// The stem's cells, lit from the first frame and left lit for the whole board.
+    var litPath: [Int] = []
+    /// The branches being asked for. A counter shows how many remain, never which.
+    var targets: Set<String> = []
+    var showsCounter = false
+    /// On timeout, walk the missed targets along their paths, one at a time. Seeing the
+    /// path is the lesson; a list of missed words teaches nothing.
+    var replayMisses = false
+    /// Cell paths for the replay, by word.
+    var targetPaths: [String: [Int]] = [:]
+
+    /// How many missed branches get drawn. Longest first.
+    static let replayCap = 5
+
+    static let ranked = GameMode()
 }
 
 /// The whole game screen, in UIKit so nothing between the digitizer and the tiles goes
@@ -20,6 +69,7 @@ final class GameViewController: UIViewController {
     private let board: GeneratedBoard
     private let config: RecognizerConfig
     private let recordRaw: Bool
+    private let mode: GameMode
     private let onFinish: (GameResult) -> Void
     private let gameId = UUID().uuidString
     private let engine = FluxEngine.shared
@@ -37,6 +87,12 @@ final class GameViewController: UIViewController {
     private let touchView = TouchOverlayView()
     private var tileViews: [TileView] = []
     private let pathLayer = CAShapeLayer()
+    /// The stem, lit under the swipe path for the whole drill. A layer rather than tile
+    /// styling, so selecting and deselecting a tile cannot rub it out.
+    private let litLayer = CAShapeLayer()
+    /// Where the miss replay draws.
+    private let replayLayer = CAShapeLayer()
+    private let counterLabel = UILabel()
     private let bubble = WordBubble()
     private var laidOut = false
 
@@ -59,6 +115,11 @@ final class GameViewController: UIViewController {
     private var warningDim = false
     private var displayedScore = 0
     private var scoreAnimation: (from: Int, to: Int, start: Double)?
+    private var foundWords: [FoundWord] = []
+    private var invalidWords: [String] = []
+    private var targetsRemaining: Set<String> = []
+    private var replaying = false
+    private var replayCompletion: (() -> Void)?
 
     // The swipe in progress
     private struct Attempt {
@@ -75,10 +136,12 @@ final class GameViewController: UIViewController {
     private var rawSamples: [(Int, Double, Double, Double, String, Bool)] = []
 
     init(board: GeneratedBoard, config: RecognizerConfig, recordRaw: Bool,
-         onFinish: @escaping (GameResult) -> Void) {
+         mode: GameMode = .ranked, onFinish: @escaping (GameResult) -> Void) {
         self.board = board
         self.config = config
         self.recordRaw = recordRaw
+        self.mode = mode
+        self.targetsRemaining = mode.targets
         self.onFinish = onFinish
         super.init(nibName: nil, bundle: nil)
     }
@@ -108,10 +171,22 @@ final class GameViewController: UIViewController {
             label.alpha = 0.8
         }
         wordsLabel.text = "0 words"
-        timeLabel.text = Self.format(remaining: Int(Self.duration))
+        timeLabel.text = Self.format(remaining: Int(mode.duration))
         timeLabel.font = .monospacedDigitSystemFont(ofSize: 18, weight: .medium)
 
-        [backButton, scoreLabel, wordsLabel, timeLabel, boardArea].forEach(view.addSubview)
+        // A drill puts the stem, a counter and the clock on screen and nothing else.
+        // The counter says how many are left, never which: naming them would turn a
+        // search into a recall test.
+        counterLabel.font = FluxFont.bold(compact ? 40 : 52)
+        counterLabel.textColor = FluxTheme.main
+        counterLabel.textAlignment = .center
+        counterLabel.isHidden = !mode.showsCounter
+        updateCounter()
+        scoreLabel.isHidden = !mode.showsScore
+        wordsLabel.isHidden = !mode.showsScore
+
+        [backButton, scoreLabel, wordsLabel, timeLabel, counterLabel, boardArea]
+            .forEach(view.addSubview)
         haptics.prepare()
         sounds.start()
 
@@ -136,6 +211,7 @@ final class GameViewController: UIViewController {
         y += UIScreen.main.bounds.height >= 700 ? 16 : 2
         scoreLabel.sizeToFit()
         scoreLabel.frame = CGRect(x: 0, y: y, width: width, height: scoreLabel.bounds.height)
+        counterLabel.frame = scoreLabel.frame
         y = scoreLabel.frame.maxY - 5
         wordsLabel.text = "000 words"
         wordsLabel.sizeToFit()
@@ -179,14 +255,25 @@ final class GameViewController: UIViewController {
         touchView.controller = self
         boardArea.addSubview(touchView)
 
-        pathLayer.frame = boardArea.bounds
-        pathLayer.fillColor = nil
+        // The lit stem goes under the swipe path, the replay over it.
+        for layer in [litLayer, pathLayer, replayLayer] {
+            layer.frame = boardArea.bounds
+            layer.fillColor = nil
+            layer.lineWidth = BoardSettings.flux.pathWidth
+            layer.lineCap = .round
+            layer.lineJoin = .round
+            layer.actions = ["path": NSNull()]
+            boardArea.layer.addSublayer(layer)
+        }
         pathLayer.strokeColor = FluxTheme.path.cgColor
-        pathLayer.lineWidth = BoardSettings.flux.pathWidth
-        pathLayer.lineCap = .round
-        pathLayer.lineJoin = .round
-        pathLayer.actions = ["path": NSNull()]
-        boardArea.layer.addSublayer(pathLayer)
+        litLayer.strokeColor = FluxTheme.main.withAlphaComponent(0.45).cgColor
+        litLayer.lineWidth = BoardSettings.flux.pathWidth * 1.4
+        replayLayer.strokeColor = FluxTheme.main.cgColor
+        replayLayer.lineWidth = BoardSettings.flux.pathWidth * 1.2
+        if !mode.litPath.isEmpty {
+            litLayer.path = bezier(through: mode.litPath).cgPath
+            for cell in mode.litPath { tileViews[cell].lit = true }
+        }
 
         bubble.slot = CGRect(x: 0, y: gridOrigin.y - wordDisplaySpacing - wordDisplayHeight,
                              width: width, height: wordDisplayHeight)
@@ -218,7 +305,7 @@ final class GameViewController: UIViewController {
             return
         }
         let elapsed = now - t0
-        let remaining = max(0, Int(Self.duration) - Int(elapsed))
+        let remaining = max(0, Int(mode.duration) - Int(elapsed))
         if remaining != lastShownRemaining {
             lastShownRemaining = remaining
             timeLabel.text = Self.format(remaining: remaining)
@@ -238,7 +325,7 @@ final class GameViewController: UIViewController {
             scoreLabel.text = "\(displayedScore)"
             if p >= 1 { scoreAnimation = nil }
         }
-        if elapsed >= Self.duration {
+        if elapsed >= mode.duration {
             // An in-progress swipe is submitted, and scores if valid, before the game ends.
             if attempt != nil { submit(cause: "timeout", at: now) }
             endGame(reason: "timeout", at: now)
@@ -343,8 +430,8 @@ final class GameViewController: UIViewController {
         }
     }
 
-    private func updatePath() {
-        let points = recognizer.path.map { c -> CGPoint in
+    private func bezier(through cells: [Int]) -> UIBezierPath {
+        let points = cells.map { c -> CGPoint in
             let p = geometry.center(c)
             return CGPoint(x: p.x + gridOrigin.x, y: p.y + gridOrigin.y)
         }
@@ -353,10 +440,20 @@ final class GameViewController: UIViewController {
             path.move(to: points[0])
             points.dropFirst().forEach { path.addLine(to: $0) }
         }
+        return path
+    }
+
+    private func updatePath() {
+        let path = bezier(through: recognizer.path)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         pathLayer.path = path.cgPath
         CATransaction.commit()
+    }
+
+    private func updateCounter() {
+        guard mode.showsCounter else { return }
+        counterLabel.text = "\(targetsRemaining.count)"
     }
 
     private func clearSelection() {
@@ -390,6 +487,8 @@ final class GameViewController: UIViewController {
             haptics.fire(Haptics.submitValid)
             sounds.wordComplete(length: word.count)
             found.insert(word)
+            foundWords.append(FoundWord(word: word, t: t, cells: cells))
+            if targetsRemaining.remove(word) != nil { updateCounter() }
             let from = displayedScore
             score += points
             scoreAnimation = (from, score, CACurrentMediaTime())
@@ -404,9 +503,16 @@ final class GameViewController: UIViewController {
         case .invalid:
             result = "invalid"
             reason = cells.isEmpty ? "empty" : (word.count < 3 ? "too_short" : "not_word")
-            if reason == "not_word" { invalidCount += 1 }
+            if reason == "not_word" {
+                invalidCount += 1
+                invalidWords.append(word)
+            }
             haptics.fire(Haptics.submitInvalid)
             sounds.invalidWord()
+        }
+
+        if mode.kind == .branchCompletion, !mode.targets.isEmpty, targetsRemaining.isEmpty {
+            DispatchQueue.main.async { self.endGame(reason: "cleared", at: CACurrentMediaTime()) }
         }
 
         let t0 = tBoardShown ?? t
@@ -501,15 +607,84 @@ final class GameViewController: UIViewController {
         }
         let result = GameResult(gameId: gameId, board: board, score: score, words: found.count,
                                 invalid: invalidCount, duplicates: duplicateCount,
-                                abandoned: reason != "timeout")
-        // Let the last word's animation land before leaving the board.
-        DispatchQueue.main.asyncAfter(deadline: .now() + (reason == "timeout" ? 0.6 : 0)) {
-            self.onFinish(result)
+                                abandoned: reason == "abandoned",
+                                found: foundWords, invalidWords: invalidWords,
+                                tBoardShown: tBoardShown ?? t)
+
+        // The single most important piece of feedback in the app: the branches that were
+        // there and were not taken, drawn along their own paths, one at a time. A list of
+        // missed words teaches nothing -- seeing the path is the lesson.
+        // Longest first and capped: SPEC 9.2 gives a per-board review fifteen seconds, and
+        // the expensive misses are the long ones. The rest are in the log.
+        let missed = mode.replayMisses && reason != "abandoned"
+            ? Array(mode.targets.filter { targetsRemaining.contains($0) }
+                .sorted { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }
+                .prefix(GameMode.replayCap))
+            : []
+        guard !missed.isEmpty else {
+            // Let the last word's animation land before leaving the board.
+            DispatchQueue.main.asyncAfter(deadline: .now() + (reason == "abandoned" ? 0 : 0.6)) {
+                self.onFinish(result)
+            }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            self.replayMissed(Array(missed)) { self.onFinish(result) }
         }
     }
 
+    /// One path at a time, slowly enough to follow, with the word in the board's own
+    /// bubble. Longest first: the expensive miss is the one worth looking at.
+    private func replayMissed(_ words: [String], completion: @escaping () -> Void) {
+        replaying = true
+        replayCompletion = completion
+        counterLabel.isHidden = true
+        timeLabel.isHidden = true
+        // Longest first: the expensive miss is the one worth looking at.
+        var queue = words.sorted { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }
+
+        func next() {
+            guard !queue.isEmpty else { return finishReplay() }
+            let word = queue.removeFirst()
+            guard let cells = mode.targetPaths[word], cells.count > 1 else { return next() }
+            bubble.show(word: word, state: .validAndAvailable)
+            replayLayer.path = bezier(through: cells).cgPath
+            // About a third of a second a cell, which is roughly four times a swipe and
+            // slow enough to read the shape rather than just see a line appear.
+            let duration = 0.32 * Double(cells.count - 1)
+            let stroke = CABasicAnimation(keyPath: "strokeEnd")
+            stroke.fromValue = 0
+            stroke.toValue = 1
+            stroke.duration = duration
+            stroke.timingFunction = CAMediaTimingFunction(name: .linear)
+            replayLayer.strokeEnd = 1
+            replayLayer.add(stroke, forKey: "replay")
+            for (i, cell) in cells.enumerated() {
+                let at = duration * Double(i) / Double(cells.count - 1)
+                DispatchQueue.main.asyncAfter(deadline: .now() + at) {
+                    guard self.replaying else { return }
+                    self.tileViews[cell].setSelected(true, state: .validAndAvailable, animated: true)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.8) {
+                guard self.replaying else { return }
+                for cell in cells {
+                    self.tileViews[cell].setSelected(false, state: .invalid, animated: false)
+                }
+                self.replayLayer.path = nil
+                self.bubble.hide()
+                next()
+            }
+        }
+        next()
+    }
+
     @objc private func backTapped() {
-        let alert = UIAlertController(title: "Abandon game?", message: "It is logged as abandoned.",
+        if replaying {
+            finishReplay()
+            return
+        }
+        let alert = UIAlertController(title: mode.kind == .ranked ? "Abandon game?" : "Leave?", message: "It is logged as abandoned.",
                                       preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Keep playing", style: .cancel))
         alert.addAction(UIAlertAction(title: "Abandon", style: .destructive) { _ in
@@ -517,6 +692,20 @@ final class GameViewController: UIViewController {
             self.endGame(reason: "abandoned", at: CACurrentMediaTime())
         })
         present(alert, animated: true)
+    }
+
+    /// Ends the replay, whether it ran out or was tapped through. Calling the completion
+    /// exactly once matters: it is what hands the session back its next screen.
+    private func finishReplay() {
+        guard replaying else { return }
+        replaying = false
+        replayLayer.removeAllAnimations()
+        replayLayer.path = nil
+        bubble.hide()
+        for tile in tileViews { tile.setSelected(false, state: .invalid, animated: false) }
+        let completion = replayCompletion
+        replayCompletion = nil
+        completion?()
     }
 
     @objc private func resignedActive() {
@@ -585,6 +774,13 @@ final class TileView: UIView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Phase 3 only: the stem the drill lights. Independent of selection, because the
+    /// player swipes over these tiles constantly and a lit tile must not be rubbed out by
+    /// a deselect.
+    var lit = false {
+        didSet { if lit != oldValue { apply(selected: false, state: .invalid) } }
+    }
+
     func setSelected(_ selected: Bool, state: WordState, animated: Bool) {
         apply(selected: selected, state: state)
         if selected {
@@ -603,7 +799,11 @@ final class TileView: UIView {
     private func apply(selected: Bool, state: WordState) {
         UIView.performWithoutAnimation {
             visual.backgroundColor = TileColors.fill(selected: selected, state: state)
-            visual.layer.borderColor = TileColors.border(selected: selected, state: state).cgColor
+            let border = !selected && lit
+                ? FluxTheme.main
+                : TileColors.border(selected: selected, state: state)
+            visual.layer.borderColor = border.cgColor
+            visual.layer.borderWidth = !selected && lit ? 2 : 1
             label.textColor = TileColors.foreground(selected: selected, state: state)
         }
     }

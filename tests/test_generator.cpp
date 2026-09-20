@@ -806,6 +806,63 @@ void testRandomWalkPlacement(const Dawg& dawg, const RulesetConfig& base) {
     CHECK(lengths.count(11) && lengths.count(13));  // the longest lengths walk too
 }
 
+// (Phase 3) The density band. SPEC 11.1 bands a constrained board on points;
+// a training board is banded on distinct word count instead, because "find the
+// hook among 180 words" and "among 800" are different tasks and a points band
+// cannot tell them apart -- board points are dominated by the longs.
+//
+// Checks that the band is actually enforced, that the target survives it, and
+// that a band no board can reach fails honestly rather than serving a board
+// outside it.
+void testWordCountBand(const Dawg& dawg, const RulesetConfig& base) {
+    RulesetConfig config = base;
+    for (uint8_t g = 0; g < config.gridCount; ++g) {
+        for (uint8_t t = 0; t < fluxcore::kTierCount; ++t) config.grids[g].candidates[t] = {4, 4};
+    }
+    SeedPool seeds;
+    seeds.buildForRuleset(dawg, config);
+    Generator generator(dawg, config, seeds);
+    Solver solver(dawg, config.scores, config.solver);
+    SolveResult result;
+    Board board;
+    GenerationRecord record;
+    Generator::ConstrainedStats stats;
+
+    const char* target = "RAIN";
+    const uint32_t low = 150, high = 320;
+    uint32_t produced = 0;
+    for (uint32_t i = 0; i < 40; ++i) {
+        if (!generator.generateConstrained(4, Tier::GoodCasual, target, 4, 0, kRootSeed + i, 0,
+                                           ~0ull, 4000, &board, &record, &stats, low, high)) {
+            continue;
+        }
+        ++produced;
+        solver.solve(board, SolveMode::Count, &result);
+        const uint32_t words = static_cast<uint32_t>(result.wordCount());
+        CHECK(words >= low && words <= high);
+        // The target is still on the board: banding must not cost the point of
+        // the board.
+        uint32_t id = 0;
+        CHECK(dawg.findWordId(target, 4, &id));
+        CHECK(std::find(result.wordIds.begin(), result.wordIds.end(), id) != result.wordIds.end());
+    }
+    CHECK(produced > 20);
+
+    // An unreachable band: every candidate is rejected for word count, the
+    // budget is exhausted and no board comes back.
+    CHECK(!generator.generateConstrained(4, Tier::GoodCasual, target, 4, 0, kRootSeed, 0, ~0ull,
+                                         200, &board, &record, &stats, 5000, 6000));
+    CHECK(stats.candidatesAccepted == 0);
+    CHECK(stats.wordRejects > 0);
+    CHECK(stats.normRejects == 0);
+    CHECK(stats.exhausted);
+
+    // Bands off (0, 0) is the old behaviour: nothing is rejected for words.
+    CHECK(generator.generateConstrained(4, Tier::GoodCasual, target, 4, 0, kRootSeed, 0, ~0ull,
+                                        2000, &board, &record, &stats, 0, 0));
+    CHECK(stats.wordRejects == 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -865,6 +922,7 @@ int main(int argc, char** argv) {
             testLetterCap(cappedDawg, client);
             testSeedPerBoard(cappedDawg, client);
             testRandomWalkPlacement(cappedDawg, client);
+            testWordCountBand(cappedDawg, client);
             testTierOrdering(cappedDawg, clientSeeds, client);
         }
     } else {

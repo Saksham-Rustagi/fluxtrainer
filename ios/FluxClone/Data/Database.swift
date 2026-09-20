@@ -8,7 +8,10 @@ import SQLite3
 /// game time.
 final class Database {
     static let shared = Database()
-    static let schemaVersion = 1
+    /// 1: Phase 1, the play log. 2: Phase 3, the training log. The Phase 1 tables are
+    /// untouched by 2 -- a training board writes an ordinary `game` and `attempt` row, so
+    /// `tools/clone_report` keeps working, with `game.purpose` telling the two apart.
+    static let schemaVersion = 2
 
     let url: URL
     private var db: OpaquePointer?
@@ -64,7 +67,99 @@ final class Database {
         );
         CREATE INDEX IF NOT EXISTS touch_sample_game ON touch_sample(game_id, seq);
         """)
+        migrateTraining()
         exec("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '\(Self.schemaVersion)')")
+    }
+
+    /// Schema 2. Designed so Phase 4 does not need a migration: the scheduling it adds
+    /// (stability, difficulty, a real interval) are columns on `hook_state`, and the
+    /// belief model it refines already has its per-word row and its event log.
+    private func migrateTraining() {
+        // Phase 1 databases predate these three columns on `game`. ALTER TABLE ADD COLUMN
+        // errors harmlessly once they exist, which is the cheapest correct migration here.
+        for column in ["purpose TEXT", "session_id TEXT", "exercise_id TEXT"] {
+            sqlite3_exec(db, "ALTER TABLE game ADD COLUMN \(column)", nil, nil, nil)
+        }
+        exec("""
+        CREATE TABLE IF NOT EXISTS session(
+            session_id TEXT PRIMARY KEY,
+            started_wall TEXT, ended_wall TEXT,
+            shape TEXT,                 -- full | short
+            new_hook TEXT, due_hooks TEXT,
+            queue_recomputed_at TEXT,
+            boards INTEGER DEFAULT 0, judgements INTEGER DEFAULT 0,
+            abandoned INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS exercise(
+            exercise_id TEXT PRIMARY KEY, session_id TEXT, seq INTEGER,
+            kind TEXT,                  -- warmup | branch_completion | family_sweep | affix_grid
+            hook TEXT, attempt_for_hook INTEGER,
+            game_id TEXT, purpose TEXT,
+            grid INTEGER, tier TEXT, letters TEXT, board_words INTEGER,
+            lit_path TEXT, targets TEXT,
+            duration REAL, started_wall TEXT, ended_wall TEXT,
+            found INTEGER, missed INTEGER,
+            degraded INTEGER DEFAULT 0, constrained_stats TEXT,
+            abandoned INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS exercise_session ON exercise(session_id, seq);
+        CREATE INDEX IF NOT EXISTS exercise_hook ON exercise(hook, started_wall);
+
+        -- One row per branch the exercise asked for. `stem_lit` is the difference between
+        -- the two drills and is why belief cannot be updated from drill outcomes alone.
+        CREATE TABLE IF NOT EXISTS branch_event(
+            exercise_id TEXT, word TEXT, hook TEXT, cls TEXT,
+            found INTEGER, t_found REAL, stem_lit INTEGER,
+            game_id TEXT, attempt_for_hook INTEGER, points INTEGER,
+            PRIMARY KEY(exercise_id, word)
+        );
+        CREATE INDEX IF NOT EXISTS branch_event_word ON branch_event(word);
+
+        -- Every solved word on every full board played in the app. The board is already
+        -- solved, so each of these is an observed presence with a known outcome; keeping
+        -- only the drilled hook's branches would throw most of the signal away for free.
+        CREATE TABLE IF NOT EXISTS presence(
+            game_id TEXT, word TEXT, len INTEGER, points INTEGER,
+            found INTEGER, t_found REAL,
+            grid INTEGER, tier TEXT, board_words INTEGER, purpose TEXT,
+            path_count INTEGER,
+            free INTEGER,               -- reachable as an extension of an earlier find
+            host TEXT,                  -- that earlier find, when free
+            source TEXT DEFAULT 'inapp',
+            -- The belief input. `opportunity` is SPEC 8.1's weight for this board and
+            -- length class; `evidence` says which exercise it came from; the two w_
+            -- columns are the contribution after the exercise weight, so the recompute
+            -- is a plain SUM and cannot drift from the weights used at write time.
+            opportunity REAL, evidence TEXT, w_finds REAL, w_opportunity REAL,
+            PRIMARY KEY(game_id, word)
+        );
+        CREATE INDEX IF NOT EXISTS presence_word ON presence(word);
+
+        CREATE TABLE IF NOT EXISTS judgement(
+            exercise_id TEXT, seq INTEGER, stem TEXT, word TEXT, cls TEXT,
+            live INTEGER, answered_live INTEGER, correct INTEGER, latency REAL,
+            from_misswipe INTEGER,
+            PRIMARY KEY(exercise_id, seq)
+        );
+        CREATE INDEX IF NOT EXISTS judgement_word ON judgement(word);
+
+        CREATE TABLE IF NOT EXISTS hook_state(
+            stem TEXT PRIMARY KEY,
+            exposures INTEGER DEFAULT 0, sweeps INTEGER DEFAULT 0,
+            first_drilled TEXT, last_drilled TEXT, due_wall TEXT,
+            grids_seen TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS word_belief(
+            word TEXT PRIMARY KEY,
+            logit REAL, belief REAL,
+            inapp_presences INTEGER DEFAULT 0, inapp_finds INTEGER DEFAULT 0,
+            inapp_weight REAL DEFAULT 0, inapp_find_weight REAL DEFAULT 0,
+            my_rate REAL, updated_wall TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS queue_state(key TEXT PRIMARY KEY, value TEXT);
+        """)
     }
 
     // MARK: Writes
@@ -98,6 +193,55 @@ final class Database {
             }
             sqlite3_finalize(stmt)
             self.exec("COMMIT")
+        }
+    }
+
+    // MARK: Generic access (the training log; Phase 1's writes keep their own methods)
+
+    /// Queued, like the Phase 1 writes: a submit never waits on disk.
+    func write(_ table: String, _ row: [String: Any?], replace: Bool = true) {
+        queue.async { self.insert(table: table, row: row, replace: replace) }
+    }
+
+    func writeMany(_ table: String, _ rows: [[String: Any?]], replace: Bool = true) {
+        guard !rows.isEmpty else { return }
+        queue.async {
+            self.exec("BEGIN")
+            for row in rows { self.insert(table: table, row: row, replace: replace) }
+            self.exec("COMMIT")
+        }
+    }
+
+    func execute(_ sql: String, _ values: [Any?] = []) {
+        queue.async { self.run(sql, values) }
+    }
+
+    /// Synchronous read. `body` sees one prepared statement positioned on each row; use
+    /// the `Row` helpers rather than sqlite3_column_* directly.
+    struct Row {
+        fileprivate let stmt: OpaquePointer?
+        func int(_ i: Int32) -> Int { Int(sqlite3_column_int64(stmt, i)) }
+        func double(_ i: Int32) -> Double { sqlite3_column_double(stmt, i) }
+        func bool(_ i: Int32) -> Bool { sqlite3_column_int(stmt, i) != 0 }
+        func isNull(_ i: Int32) -> Bool { sqlite3_column_type(stmt, i) == SQLITE_NULL }
+        func text(_ i: Int32) -> String {
+            guard let c = sqlite3_column_text(stmt, i) else { return "" }
+            return String(cString: c)
+        }
+        func optionalText(_ i: Int32) -> String? { isNull(i) ? nil : text(i) }
+        func optionalDouble(_ i: Int32) -> Double? { isNull(i) ? nil : double(i) }
+    }
+
+    func query(_ sql: String, _ values: [Any?] = [], _ body: (Row) -> Void) {
+        queue.sync {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                print("SQL prepare failed: \(String(cString: sqlite3_errmsg(db))) in \(sql)")
+                return
+            }
+            defer { sqlite3_finalize(stmt) }
+            bind(stmt, values)
+            while sqlite3_step(stmt) == SQLITE_ROW { body(Row(stmt: stmt)) }
         }
     }
 

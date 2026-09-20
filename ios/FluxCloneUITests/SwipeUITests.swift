@@ -30,3 +30,34 @@ final class SwipeUITests: XCTestCase {
         add(shot)
     }
 }
+
+/// The training session reaches a drill board, on the real queue and the real engine.
+/// Cheap, and it guards the whole chain: hook record parsed, queue ranked, a hook chosen,
+/// a constrained board generated and solved, the stem lit and a counter on screen.
+final class TrainingUITests: XCTestCase {
+    func testTrainingReachesADrillBoard() {
+        let app = XCUIApplication()
+        app.launchEnvironment["FLUXCLONE_TRAIN"] = "1"
+        app.launch()
+
+        // A drill runs 30 to 45 seconds, so the clock reads 00:xx from the first frame --
+        // that alone distinguishes it from the clone's 80-second board.
+        let clock = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '00:'")).firstMatch
+        XCTAssertTrue(clock.waitForExistence(timeout: 40), "no drill board")
+
+        // The counter says how many branches remain, never which. 3 to 6 of them.
+        let counter = app.staticTexts.matching(
+            NSPredicate(format: "label MATCHES '^[3-6]$'")).firstMatch
+        XCTAssertTrue(counter.waitForExistence(timeout: 5), "no target counter on the drill")
+
+        // No score and no word count: nothing on a drill but the stem, the counter and
+        // the clock.
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label ENDSWITH ' words'")).firstMatch.exists,
+            "the word count is showing during a drill")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+}

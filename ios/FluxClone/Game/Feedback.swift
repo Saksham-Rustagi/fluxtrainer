@@ -5,6 +5,14 @@ import UIKit
 /// fired as BoardView.triggerHaptic does: impactOccurred(intensity: 0.9) on generators
 /// created and prepared once per game and never re-prepared mid-game.
 final class Haptics {
+    /// The board makes its own, once per game, as Flux does. This one is for the screens
+    /// outside the board -- the affix grid -- which fire a handful of taps an exercise.
+    static let shared: Haptics = {
+        let h = Haptics()
+        h.prepare()
+        return h
+    }()
+
     enum Pattern { case none, light, medium, heavy, double }
 
     static let startChain: Pattern = .none

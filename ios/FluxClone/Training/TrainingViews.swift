@@ -1,0 +1,239 @@
+import SwiftUI
+
+private let accent = Color(uiColor: FluxTheme.main)
+private let bg = Color(uiColor: FluxTheme.bg)
+private let panel = Color(uiColor: FluxTheme.subAlt)
+
+/// The whole session, one screen at a time. Nothing here asks which hook to work on and
+/// nothing here has a menu.
+struct SessionView: View {
+    @ObservedObject var session: TrainingSession
+    let onExit: () -> Void
+
+    var body: some View {
+        Group {
+            switch session.screen {
+            case .preparing(let what):
+                PreparingView(what: what, onExit: exit)
+            case .board(let state):
+                GameHost(board: state.board.board, mode: state.mode) { result in
+                    session.boardFinished(state, result: result)
+                }
+                .id(state.exerciseId)
+                .ignoresSafeArea()
+            case .verdict(let verdict):
+                VerdictView(verdict: verdict,
+                            again: session.repeatBoard,
+                            onward: verdict.canRepeat ? session.skipHook : session.next)
+            case .affixGrid(let hook, let id, let seq):
+                AffixGridView(hook: hook, exerciseId: id, sessionId: session.sessionId,
+                              seq: seq) { correct, total, abandoned in
+                    session.affixGridFinished(exerciseId: id, correct: correct, total: total,
+                                              abandoned: abandoned)
+                }
+            case .summary(let summary):
+                SummaryView(summary: summary, queue: session.queue, done: exit)
+            case .failed(let message):
+                FailureView(message: message, done: exit)
+            }
+        }
+        .background(bg)
+    }
+
+    private func exit() {
+        if case .summary = session.screen {} else { session.abandon() }
+        onExit()
+    }
+}
+
+private struct PreparingView: View {
+    let what: String
+    let onExit: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ProgressView().tint(accent).scaleEffect(1.4)
+            Text(what).foregroundStyle(.secondary)
+            Button("Leave", action: onExit).padding(.top, 30)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(bg)
+    }
+}
+
+/// SPEC 9.2: one card, fifteen seconds, then straight on. The spatial half of the review
+/// already happened on the board -- the missed branches were drawn along their paths.
+private struct VerdictView: View {
+    let verdict: TrainingSession.Verdict
+    let again: () -> Void
+    let onward: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Spacer()
+            if let hook = verdict.hook {
+                Text(verdict.stemWasLit ? "\(hook.stem)- lit" : "\(hook.stem)-")
+                    .font(Font(FluxFont.bold(40)))
+                    .foregroundStyle(accent)
+                Text("\(verdict.found.count) of \(verdict.found.count + verdict.missed.count)"
+                     + (verdict.stemWasLit ? " with the stem lit" : " unprompted"))
+                    .font(.title3)
+                    .foregroundStyle(.white)
+            } else {
+                Text("Warm-up done")
+                    .font(Font(FluxFont.bold(36)))
+                    .foregroundStyle(accent)
+                Text("\(verdict.score) points. Nothing recorded against the queue.")
+                    .foregroundStyle(.secondary)
+            }
+
+            if !verdict.found.isEmpty {
+                wordRow(verdict.found, color: accent)
+            }
+            if !verdict.missed.isEmpty {
+                wordRow(verdict.missed, color: Color(uiColor: FluxTheme.colorfulError))
+            }
+            Spacer()
+
+            if verdict.canRepeat {
+                // One tap to repeat. The second attempt is where it sticks.
+                Button(action: again) {
+                    Text("Again, new board")
+                        .font(.title2.weight(.heavy))
+                        .frame(maxWidth: .infinity).padding()
+                }
+                .buttonStyle(.borderedProminent).tint(accent)
+                .foregroundStyle(bg)
+            }
+            Button(action: onward) {
+                Text(verdict.canRepeat ? "Move on" : "Next")
+                    .font(.title3.weight(.bold))
+                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+            }
+            .tint(accent)
+        }
+        .padding(.horizontal, 26)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(bg)
+    }
+
+    private func wordRow(_ words: [String], color: Color) -> some View {
+        Text(words.sorted().joined(separator: " · "))
+            .font(.body.monospaced())
+            .foregroundStyle(color)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(panel))
+    }
+}
+
+/// Twenty seconds. What stuck, and what to expect tomorrow.
+private struct SummaryView: View {
+    let summary: TrainingSession.Summary
+    let queue: TrainingQueue
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Spacer()
+            Text("Done").font(Font(FluxFont.bold(48))).foregroundStyle(accent)
+
+            if summary.litTotal > 0 {
+                line("With the stem lit", "\(summary.litFound) of \(summary.litTotal)")
+            }
+            if summary.unpromptedTotal > 0 {
+                // The number that actually matters, and the one the gate is about.
+                line("Unprompted", "\(summary.unpromptedFound) of \(summary.unpromptedTotal)")
+            }
+            if summary.judgements > 0 {
+                line("Affix grid", "\(summary.judgementsCorrect) of \(summary.judgements)"
+                     + (summary.medianJudgementLatency.map { String(format: " · %.2f s", $0) } ?? ""))
+            }
+            line("Boards", "\(summary.boards)")
+            if summary.degradedBoards > 0 {
+                // Never silently serve a board that missed its targets.
+                line("Boards short of their constraints", "\(summary.degradedBoards)")
+            }
+
+            Divider().overlay(Color.white.opacity(0.15)).padding(.vertical, 6)
+
+            Text("Tomorrow").font(.headline).foregroundStyle(.white)
+            if let tomorrow = summary.tomorrowHook {
+                Text("\(tomorrow)- is next up.").foregroundStyle(.secondary)
+            }
+            if summary.dueTomorrow > 0 {
+                Text("\(summary.dueTomorrow) hook\(summary.dueTomorrow == 1 ? "" : "s") due for a sweep.")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+
+            Text(queue.recomputedText)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Button(action: done) {
+                Text("Close").font(.title3.weight(.heavy))
+                    .frame(maxWidth: .infinity).padding()
+            }
+            .buttonStyle(.borderedProminent).tint(accent).foregroundStyle(bg)
+        }
+        .padding(.horizontal, 26)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(bg)
+    }
+
+    private func line(_ key: String, _ value: String) -> some View {
+        HStack {
+            Text(key).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).font(.body.monospacedDigit()).foregroundStyle(.white)
+        }
+    }
+}
+
+private struct FailureView: View {
+    let message: String
+    let done: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text(message).multilineTextAlignment(.center).foregroundStyle(.secondary)
+            Button("Back", action: done).tint(accent)
+        }
+        .padding(30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(bg)
+    }
+}
+
+/// The one button. Everything about the session is decided behind it.
+struct TrainCard: View {
+    @ObservedObject var queue: TrainingQueue
+    let start: (_ shortDay: Bool) -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Button { start(false) } label: {
+                HStack {
+                    Spacer()
+                    Text(TrainingSession.Resume.pending ? "Resume" : "Train")
+                        .font(.system(size: 28, weight: .heavy))
+                    Spacer()
+                }
+                .padding(.vertical, 14)
+            }
+            Button("Short day (one board and a grid)") { start(true) }
+                .font(.footnote)
+                .tint(accent)
+            if let next = queue.ranked.first(where: \.eligible) {
+                Text("next: \(next.hook.stem)-")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+            }
+            Text(queue.recomputedText)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}

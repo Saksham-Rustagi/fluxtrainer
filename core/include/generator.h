@@ -218,6 +218,7 @@ public:
         uint32_t solves = 0;
         uint32_t placementFailures = 0;
         uint32_t normRejects = 0;
+        uint32_t wordRejects = 0;
         bool exhausted = false;
     };
 
@@ -226,10 +227,18 @@ public:
     // band [normLow, normHigh]. Returns false if `attemptBudget` ran out
     // before N candidates were accepted, which is the infeasibility case the
     // fallback ladder in 11.1 exists for.
+    //
+    // [minWords, maxWords] is a second, independent band on the board's total
+    // distinct word count; 0 on either end disables that end. Phase 3's
+    // acquisition boards band on word count rather than points because the
+    // task being trained is finding one hook among the other words, and
+    // "among 180" and "among 800" are different tasks -- a points band cannot
+    // separate them, since a board's points are dominated by its longs.
     bool generateConstrained(uint8_t side, Tier tier, const char* target, uint8_t targetLen,
                              uint32_t boardIndex, uint64_t rootSeed, uint64_t normLow,
                              uint64_t normHigh, uint32_t attemptBudget, Board* outBoard,
-                             GenerationRecord* outRecord, ConstrainedStats* outStats);
+                             GenerationRecord* outRecord, ConstrainedStats* outStats = nullptr,
+                             uint32_t minWords = 0, uint32_t maxWords = 0);
 
     // The 60/40 grid split and the tier shares, for callers that want the
     // ranked mix rather than a stratified cell.

@@ -698,7 +698,8 @@ uint64_t canonicalBoardHash(const Board& board) {
 bool Generator::generateConstrained(uint8_t side, Tier tier, const char* target, uint8_t targetLen,
                                     uint32_t boardIndex, uint64_t rootSeed, uint64_t normLow,
                                     uint64_t normHigh, uint32_t attemptBudget, Board* outBoard,
-                                    GenerationRecord* outRecord, ConstrainedStats* outStats) {
+                                    GenerationRecord* outRecord, ConstrainedStats* outStats,
+                                    uint32_t minWords, uint32_t maxWords) {
     ConstrainedStats stats;
     const GridConfig* grid = config_.grid(side);
     if (grid == nullptr || side == 0 || side > kMaxSide || targetLen == 0) {
@@ -776,6 +777,11 @@ bool Generator::generateConstrained(uint8_t side, Tier tier, const char* target,
         const uint64_t points = scratch_.totalPoints;
         if (points < normLow || points > normHigh) {
             ++stats.normRejects;
+            continue;
+        }
+        const uint32_t words = static_cast<uint32_t>(scratch_.wordCount());
+        if ((minWords != 0 && words < minWords) || (maxWords != 0 && words > maxWords)) {
+            ++stats.wordRejects;
             continue;
         }
 

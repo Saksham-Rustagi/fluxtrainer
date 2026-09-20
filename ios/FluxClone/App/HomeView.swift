@@ -15,6 +15,20 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Phase 3. The trainer sits above Play because the curriculum is why the
+                // app exists; Play is the clone, and it is now the measurement path.
+                Section {
+                    if let queue = model.queue {
+                        TrainCard(queue: queue) { shortDay in model.train(shortDay: shortDay) }
+                            .listRowBackground(fluxAccent.opacity(0.25))
+                    } else if let error = model.queueError {
+                        Text("Training is off: \(error)")
+                            .font(.footnote).foregroundStyle(.orange)
+                    } else {
+                        HStack { Spacer(); ProgressView(); Spacer() }
+                    }
+                }
+
                 Section {
                     Button(action: model.play) {
                         HStack {
