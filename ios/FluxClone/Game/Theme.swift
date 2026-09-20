@@ -18,7 +18,9 @@ enum FluxTheme {
     static let mainContrast = bg        // of [sub, text, bg] against main: 8.86
     static let subContrast = text       // of [main, text, bg] against sub: 8.16
 
-    static let path = colorfulError     // pathColorReference default: colorfulErrorColor
+    // Path colour: Flux's "Color 2" (pathColorReference .subColor). The default is
+    // Color 6 (colorfulErrorColor); this matches the setting in use.
+    static let path = sub
 }
 
 enum WordState {
